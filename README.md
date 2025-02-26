@@ -2,6 +2,9 @@
 
 
 This is a RPG plugin for Obsidian (https://obsidian.md).
-give you levels and achievements by susing obsidian functions
+
+give you levels and achievements by using obsidian functions
+
 rewards for multiple days of use
+
 shown level and xp next to world count

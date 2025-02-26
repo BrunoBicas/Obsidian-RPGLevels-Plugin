@@ -16,6 +16,8 @@ interface RPGLevelsSettings {
 	};
 	lastActive: string;
 	streakDays: number;
+	// Add a flag to track if daily XP has been awarded today
+	dailyXpAwarded: boolean;
 }
 
 const DEFAULT_SETTINGS: RPGLevelsSettings = {
@@ -37,7 +39,8 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
 		"7_day_streak": false
 	},
 	lastActive: '',
-	streakDays: 0
+	streakDays: 0,
+	dailyXpAwarded: false
 };
 
 export default class RPGLevelsPlugin extends Plugin {
@@ -112,7 +115,7 @@ export default class RPGLevelsPlugin extends Plugin {
 			})
 		);
 		
-		// Check for daily streak when Obsidian loads
+		// Check for daily streak when Obsidian loads, but only award XP once per day
 		this.checkDailyStreak();
 		
 		// Add commands
@@ -124,11 +127,16 @@ export default class RPGLevelsPlugin extends Plugin {
 			}
 		});
 		
-		// Initialize note count
-		this.app.vault.getMarkdownFiles().then(files => {
+		// Initialize note count - FIX for line 118
+		try {
+			const files = await this.app.vault.getMarkdownFiles();
 			this.noteCount = files.length;
 			this.checkAchievements();
-		});
+		} catch (error) {
+			console.error("Error initializing note count:", error);
+			// Fallback - we'll count notes as they're accessed instead
+			this.noteCount = 0;
+		}
 	}
 	
 	onunload() {
@@ -182,6 +190,7 @@ export default class RPGLevelsPlugin extends Plugin {
 			// First time using the plugin
 			this.settings.lastActive = today;
 			this.settings.streakDays = 1;
+			this.settings.dailyXpAwarded = true;
 			this.saveSettings();
 			return;
 		}
@@ -193,18 +202,30 @@ export default class RPGLevelsPlugin extends Plugin {
 		const timeDiff = currentDate.getTime() - lastActiveDate.getTime();
 		const dayDiff = Math.floor(timeDiff / (1000 * 3600 * 24));
 		
-		if (dayDiff === 1) {
-			// Consecutive day
-			this.settings.streakDays++;
-			this.awardXP('dailyStreak', `Daily streak (${this.settings.streakDays} days): +${this.settings.xpGainRates.dailyStreak}XP`);
-			this.checkAchievements();
-		} else if (dayDiff > 1) {
-			// Streak broken
-			new Notice(`Streak reset! You were away for ${dayDiff} days.`);
-			this.settings.streakDays = 1;
+		// Check if we're on a new day and haven't awarded XP yet today
+		if (dayDiff >= 1 && !this.settings.dailyXpAwarded) {
+			if (dayDiff === 1) {
+				// Consecutive day
+				this.settings.streakDays++;
+				this.awardXP('dailyStreak', `Daily streak (${this.settings.streakDays} days): +${this.settings.xpGainRates.dailyStreak}XP`);
+				this.checkAchievements();
+			} else if (dayDiff > 1) {
+				// Streak broken
+				new Notice(`Streak reset! You were away for ${dayDiff} days.`);
+				this.settings.streakDays = 1;
+			}
+			
+			// Mark that we've awarded XP for today
+			this.settings.dailyXpAwarded = true;
 		}
 		
-		this.settings.lastActive = today;
+		// Always update the last active date
+		if (this.settings.lastActive !== today) {
+			this.settings.lastActive = today;
+			// Reset the dailyXpAwarded flag when it's a new day
+			this.settings.dailyXpAwarded = false;
+		}
+		
 		this.saveSettings();
 	}
 	
@@ -236,8 +257,8 @@ export default class RPGLevelsPlugin extends Plugin {
 			this.showAchievementNotice("Master Connector", "Created 50 links between your notes");
 		}
 		
-		if (!achievements.seven_day_streak && this.settings.streakDays >= 7) {
-			achievements.seven_day_streak = true;
+		if (!achievements["7_day_streak"] && this.settings.streakDays >= 7) {
+			achievements["7_day_streak"] = true;
 			earned = true;
 			this.showAchievementNotice("Dedication", "Used Obsidian for 7 days in a row");
 		}

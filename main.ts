@@ -17,7 +17,7 @@ interface RPGLevelsSettings {
 	lastActive: string;
 	streakDays: number;
 	dailyXpAwarded: boolean;
-	initializedNoteCount: boolean; // New flag to track if we've initialized note count
+	initializedNoteCount: boolean;
 }
 
 const DEFAULT_SETTINGS: RPGLevelsSettings = {
@@ -41,7 +41,7 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
 	lastActive: '',
 	streakDays: 0,
 	dailyXpAwarded: false,
-	initializedNoteCount: false // Initialize as false
+	initializedNoteCount: false
 };
 
 // Define a type for achievement info
@@ -60,6 +60,7 @@ export default class RPGLevelsPlugin extends Plugin {
 	statusBarEl: HTMLElement;
 	linkCount: number = 0;
 	noteCount: number = 0;
+	isInitializing: boolean = true; // Flag to track initialization state
 	
 	async onload() {
 		await this.loadSettings();
@@ -71,64 +72,83 @@ export default class RPGLevelsPlugin extends Plugin {
 		// Add settings tab
 		this.addSettingTab(new RPGLevelsSettingTab(this.app, this));
 		
-		// Register events to earn XP
-		this.registerEvent(
-			this.app.vault.on('create', (file) => {
-				if (file instanceof TFile && file.extension === 'md') {
-					this.awardXP('createNote', `Created note: +${this.settings.xpGainRates.createNote}XP`);
-					this.noteCount++;
-					this.checkAchievements();
-				}
-			})
-		);
+		// Initialize note count without awarding XP
+		try {
+			const files = await this.app.vault.getMarkdownFiles();
+			this.noteCount = files.length;
+			// Just check achievements for already earned ones
+			this.checkAchievementsNoXP();
+		} catch (error) {
+			console.error("Error initializing note count:", error);
+			this.noteCount = 0;
+		}
 		
-		this.registerEvent(
-			this.app.vault.on('modify', (file) => {
-				if (file instanceof TFile && file.extension === 'md') {
-					this.awardXP('editNote', `Edited note: +${this.settings.xpGainRates.editNote}XP`);
-				}
-			})
-		);
-		
-		// Track internal links
-		this.registerEvent(
-			this.app.workspace.on('editor-change', (editor) => {
-				const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (view) {
-					const text = editor.getValue();
-					const linkCountNew = (text.match(/\[\[.*?\]\]/g) || []).length;
-					
-					if (linkCountNew > this.linkCount) {
-						const diff = linkCountNew - this.linkCount;
-						for (let i = 0; i < diff; i++) {
-							this.awardXP('createLink', `Created link: +${this.settings.xpGainRates.createLink}XP`);
+		// Wait a short time before registering events to ensure initialization is complete
+		setTimeout(() => {
+			this.isInitializing = false; // Initialization is complete
+			
+			// Register events to earn XP - only after initialization
+			this.registerEvent(
+				this.app.vault.on('create', (file) => {
+					if (file instanceof TFile && file.extension === 'md') {
+						this.noteCount++;
+						// Only award XP if we're not in initialization
+						if (!this.isInitializing) {
+							this.awardXP('createNote', `Created note: +${this.settings.xpGainRates.createNote}XP`);
+							this.checkAchievements();
 						}
-						this.linkCount = linkCountNew;
-						this.checkAchievements();
 					}
-				}
-			})
-		);
-		
-		// Track tags
-		this.registerEvent(
-			this.app.workspace.on('editor-change', (editor) => {
-				const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (view) {
-					const text = editor.getValue();
-					const currentTags = text.match(/#[a-zA-Z0-9_-]+/g) || [];
-					const prevContent = view.data;
-					const prevTags = prevContent.match(/#[a-zA-Z0-9_-]+/g) || [];
-					
-					if (currentTags.length > prevTags.length) {
-						this.awardXP('addTag', `Added tag: +${this.settings.xpGainRates.addTag}XP`);
+				})
+			);
+			
+			this.registerEvent(
+				this.app.vault.on('modify', (file) => {
+					if (file instanceof TFile && file.extension === 'md') {
+						this.awardXP('editNote', `Edited note: +${this.settings.xpGainRates.editNote}XP`);
 					}
-				}
-			})
-		);
-		
-		// Check for daily streak when Obsidian loads, but only award XP once per day
-		this.checkDailyStreak();
+				})
+			);
+			
+			// Track internal links
+			this.registerEvent(
+				this.app.workspace.on('editor-change', (editor) => {
+					const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+					if (view) {
+						const text = editor.getValue();
+						const linkCountNew = (text.match(/\[\[.*?\]\]/g) || []).length;
+						
+						if (linkCountNew > this.linkCount) {
+							const diff = linkCountNew - this.linkCount;
+							for (let i = 0; i < diff; i++) {
+								this.awardXP('createLink', `Created link: +${this.settings.xpGainRates.createLink}XP`);
+							}
+							this.linkCount = linkCountNew;
+							this.checkAchievements();
+						}
+					}
+				})
+			);
+			
+			// Track tags
+			this.registerEvent(
+				this.app.workspace.on('editor-change', (editor) => {
+					const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+					if (view) {
+						const text = editor.getValue();
+						const currentTags = text.match(/#[a-zA-Z0-9_-]+/g) || [];
+						const prevContent = view.data;
+						const prevTags = prevContent.match(/#[a-zA-Z0-9_-]+/g) || [];
+						
+						if (currentTags.length > prevTags.length) {
+							this.awardXP('addTag', `Added tag: +${this.settings.xpGainRates.addTag}XP`);
+						}
+					}
+				})
+			);
+			
+			// Check for daily streak when Obsidian loads, but only award XP once per day
+			this.checkDailyStreak();
+		}, 1000); // 1 second delay
 		
 		// Add commands
 		this.addCommand({
@@ -138,23 +158,6 @@ export default class RPGLevelsPlugin extends Plugin {
 				this.showStatsModal();
 			}
 		});
-		
-		// Initialize note count - FIX: Only count notes without awarding XP
-		try {
-			// Only initialize note count if we haven't done so already
-			if (!this.settings.initializedNoteCount) {
-				const files = await this.app.vault.getMarkdownFiles();
-				this.noteCount = files.length;
-				// Don't award XP, just check achievements and update the flag
-				this.settings.initializedNoteCount = true;
-				this.saveSettings();
-				this.checkAchievements();
-			}
-		} catch (error) {
-			console.error("Error initializing note count:", error);
-			// Fallback - we'll count notes as they're accessed instead
-			this.noteCount = 0;
-		}
 	}
 	
 	onunload() {
@@ -180,6 +183,9 @@ export default class RPGLevelsPlugin extends Plugin {
 	}
 	
 	awardXP(type: keyof typeof DEFAULT_SETTINGS.xpGainRates, message: string) {
+		// Don't award XP during initialization
+		if (this.isInitializing) return;
+		
 		const xpAmount = this.settings.xpGainRates[type];
 		this.settings.currentXP += xpAmount;
 		
@@ -230,11 +236,17 @@ export default class RPGLevelsPlugin extends Plugin {
 			if (dayDiff === 1) {
 				// Consecutive day
 				this.settings.streakDays++;
-				this.awardXP('dailyStreak', `Daily streak (${this.settings.streakDays} days): +${this.settings.xpGainRates.dailyStreak}XP`);
+				
+				// Only award XP if not initializing
+				if (!this.isInitializing) {
+					this.awardXP('dailyStreak', `Daily streak (${this.settings.streakDays} days): +${this.settings.xpGainRates.dailyStreak}XP`);
+				}
 				this.checkAchievements();
 			} else if (dayDiff > 1) {
 				// Streak broken
-				new Notice(`Streak reset! You were away for ${dayDiff} days.`);
+				if (!this.isInitializing) {
+					new Notice(`Streak reset! You were away for ${dayDiff} days.`);
+				}
 				this.settings.streakDays = 1;
 			}
 			
@@ -252,6 +264,41 @@ export default class RPGLevelsPlugin extends Plugin {
 		this.saveSettings();
 	}
 	
+	// Check achievements but don't award XP - for initialization
+	checkAchievementsNoXP() {
+		const achievements = this.settings.achievements;
+		let earned = false;
+		
+		if (!achievements.first_note && this.noteCount > 0) {
+			achievements.first_note = true;
+			earned = true;
+		}
+		
+		if (!achievements.reach_level_5 && this.settings.level >= 5) {
+			achievements.reach_level_5 = true;
+			earned = true;
+		}
+		
+		if (!achievements.create_10_notes && this.noteCount >= 10) {
+			achievements.create_10_notes = true;
+			earned = true;
+		}
+		
+		if (!achievements.create_50_links && this.linkCount >= 50) {
+			achievements.create_50_links = true;
+			earned = true;
+		}
+		
+		if (!achievements["7_day_streak"] && this.settings.streakDays >= 7) {
+			achievements["7_day_streak"] = true;
+			earned = true;
+		}
+		
+		if (earned) {
+			this.saveSettings();
+		}
+	}
+	
 	checkAchievements() {
 		const achievements = this.settings.achievements;
 		let earned = false;
@@ -259,31 +306,42 @@ export default class RPGLevelsPlugin extends Plugin {
 		if (!achievements.first_note && this.noteCount > 0) {
 			achievements.first_note = true;
 			earned = true;
-			this.showAchievementNotice("First Note Created", "You've begun your knowledge journey!");
+			// Only show achievement notice if not initializing
+			if (!this.isInitializing) {
+				this.showAchievementNotice("First Note Created", "You've begun your knowledge journey!");
+			}
 		}
 		
 		if (!achievements.reach_level_5 && this.settings.level >= 5) {
 			achievements.reach_level_5 = true;
 			earned = true;
-			this.showAchievementNotice("Knowledge Apprentice", "Reached level 5");
+			if (!this.isInitializing) {
+				this.showAchievementNotice("Knowledge Apprentice", "Reached level 5");
+			}
 		}
 		
 		if (!achievements.create_10_notes && this.noteCount >= 10) {
 			achievements.create_10_notes = true;
 			earned = true;
-			this.showAchievementNotice("Prolific Scholar", "Created 10 notes");
+			if (!this.isInitializing) {
+				this.showAchievementNotice("Prolific Scholar", "Created 10 notes");
+			}
 		}
 		
 		if (!achievements.create_50_links && this.linkCount >= 50) {
 			achievements.create_50_links = true;
 			earned = true;
-			this.showAchievementNotice("Master Connector", "Created 50 links between your notes");
+			if (!this.isInitializing) {
+				this.showAchievementNotice("Master Connector", "Created 50 links between your notes");
+			}
 		}
 		
 		if (!achievements["7_day_streak"] && this.settings.streakDays >= 7) {
 			achievements["7_day_streak"] = true;
 			earned = true;
-			this.showAchievementNotice("Dedication", "Used Obsidian for 7 days in a row");
+			if (!this.isInitializing) {
+				this.showAchievementNotice("Dedication", "Used Obsidian for 7 days in a row");
+			}
 		}
 		
 		if (earned) {
@@ -292,6 +350,9 @@ export default class RPGLevelsPlugin extends Plugin {
 	}
 	
 	showAchievementNotice(title: string, description: string) {
+		// Don't show notices during initialization
+		if (this.isInitializing) return;
+		
 		new Notice(`🏆 ACHIEVEMENT UNLOCKED! 🏆\n${title}: ${description}`, 7000);
 		
 		// Bonus XP for achievements
@@ -351,7 +412,6 @@ export default class RPGLevelsPlugin extends Plugin {
 		});
 	}
 	
-	// Fix: Create a proper typed dictionary for achievements
 	getAchievementInfo(key: string): AchievementInfo {
 		const achievements: AchievementsDict = {
 			"first_note": { title: "First Note Created", description: "You've begun your knowledge journey!" },
@@ -466,4 +526,3 @@ class RPGLevelsSettingTab extends PluginSettingTab {
 				}));
 	}
 }
-69

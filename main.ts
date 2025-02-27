@@ -16,8 +16,8 @@ interface RPGLevelsSettings {
 	};
 	lastActive: string;
 	streakDays: number;
-	// Add a flag to track if daily XP has been awarded today
 	dailyXpAwarded: boolean;
+	initializedNoteCount: boolean; // New flag to track if we've initialized note count
 }
 
 const DEFAULT_SETTINGS: RPGLevelsSettings = {
@@ -40,7 +40,19 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
 	},
 	lastActive: '',
 	streakDays: 0,
-	dailyXpAwarded: false
+	dailyXpAwarded: false,
+	initializedNoteCount: false // Initialize as false
+};
+
+// Define a type for achievement info
+interface AchievementInfo {
+	title: string;
+	description: string;
+}
+
+// Define a type for the achievements dictionary
+type AchievementsDict = {
+	[key: string]: AchievementInfo;
 };
 
 export default class RPGLevelsPlugin extends Plugin {
@@ -127,11 +139,17 @@ export default class RPGLevelsPlugin extends Plugin {
 			}
 		});
 		
-		// Initialize note count - FIX for line 118
+		// Initialize note count - FIX: Only count notes without awarding XP
 		try {
-			const files = await this.app.vault.getMarkdownFiles();
-			this.noteCount = files.length;
-			this.checkAchievements();
+			// Only initialize note count if we haven't done so already
+			if (!this.settings.initializedNoteCount) {
+				const files = await this.app.vault.getMarkdownFiles();
+				this.noteCount = files.length;
+				// Don't award XP, just check achievements and update the flag
+				this.settings.initializedNoteCount = true;
+				this.saveSettings();
+				this.checkAchievements();
+			}
 		} catch (error) {
 			console.error("Error initializing note count:", error);
 			// Fallback - we'll count notes as they're accessed instead
@@ -146,6 +164,11 @@ export default class RPGLevelsPlugin extends Plugin {
 	
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		
+		// Make sure the new initializedNoteCount property exists
+		if (this.settings.initializedNoteCount === undefined) {
+			this.settings.initializedNoteCount = false;
+		}
 	}
 	
 	async saveSettings() {
@@ -328,8 +351,9 @@ export default class RPGLevelsPlugin extends Plugin {
 		});
 	}
 	
-	getAchievementInfo(key: string) {
-		const achievements = {
+	// Fix: Create a proper typed dictionary for achievements
+	getAchievementInfo(key: string): AchievementInfo {
+		const achievements: AchievementsDict = {
 			"first_note": { title: "First Note Created", description: "You've begun your knowledge journey!" },
 			"reach_level_5": { title: "Knowledge Apprentice", description: "Reached level 5" },
 			"create_10_notes": { title: "Prolific Scholar", description: "Created 10 notes" },
@@ -337,6 +361,7 @@ export default class RPGLevelsPlugin extends Plugin {
 			"7_day_streak": { title: "Dedication", description: "Used Obsidian for 7 days in a row" }
 		};
 		
+		// Safely return the achievement info or a default if key doesn't exist
 		return achievements[key] || { title: key, description: "" };
 	}
 }
@@ -441,3 +466,4 @@ class RPGLevelsSettingTab extends PluginSettingTab {
 				}));
 	}
 }
+69

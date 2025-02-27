@@ -1,6 +1,5 @@
 import { App, Plugin, PluginSettingTab, Setting, TFile, MarkdownView, Notice } from 'obsidian';
 
-
 interface RPGLevelsSettings {
 	currentXP: number;
 	level: number;
@@ -71,6 +70,7 @@ export default class RPGLevelsPlugin extends Plugin {
 	private editTimer: NodeJS.Timeout | null = null;
 	private currentEditFile: string | null = null;
 	private originalContent: string = '';
+	private hasActiveFile: boolean = false; // New flag to track if we have an active file
 	
 	async onload() {
 		await this.loadSettings();
@@ -111,13 +111,14 @@ export default class RPGLevelsPlugin extends Plugin {
 				})
 			);
 			
-			// Modified to start tracking edits
+			// Modified to start tracking edits and initialize the current file right away
 			this.registerEvent(
 				this.app.workspace.on('file-open', async (file) => {
 					if (file instanceof TFile && file.extension === 'md') {
 						// Store the original content when a file is opened
 						this.currentEditFile = file.path;
 						this.originalContent = await this.app.vault.read(file);
+						this.hasActiveFile = true; // Mark that we have an active file
 					}
 				})
 			);
@@ -170,6 +171,9 @@ export default class RPGLevelsPlugin extends Plugin {
 			
 			// Check for daily streak when Obsidian loads, but only award XP once per day
 			this.checkDailyStreak();
+
+			// ADDED: Initialize with currently open file, if any
+			this.initializeCurrentFile();
 		}, 1000); // 1 second delay
 		
 		// Add commands
@@ -180,6 +184,20 @@ export default class RPGLevelsPlugin extends Plugin {
 				this.showStatsModal();
 			}
 		});
+	}
+
+	// New method to initialize with currently open file
+	async initializeCurrentFile() {
+		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (activeView && activeView.file) {
+			this.currentEditFile = activeView.file.path;
+			this.originalContent = await this.app.vault.read(activeView.file);
+			this.hasActiveFile = true;
+			
+			// Count existing links in the current file
+			const text = activeView.editor.getValue();
+			this.linkCount = (text.match(/\[\[.*?\]\]/g) || []).length;
+		}
 	}
 	
 	// New method to handle file modifications
@@ -193,7 +211,7 @@ export default class RPGLevelsPlugin extends Plugin {
 		this.editTimer = setTimeout(async () => {
 			try {
 				// Only process if this is the currently edited file
-				if (this.currentEditFile === file.path && this.originalContent) {
+				if (this.currentEditFile === file.path && this.hasActiveFile) { // Changed condition to check hasActiveFile
 					// Read the new content
 					const newContent = await this.app.vault.read(file);
 					

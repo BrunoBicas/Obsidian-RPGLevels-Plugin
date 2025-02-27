@@ -1,5 +1,6 @@
 import { App, Plugin, PluginSettingTab, Setting, TFile, MarkdownView, Notice } from 'obsidian';
 
+
 interface RPGLevelsSettings {
 	currentXP: number;
 	level: number;
@@ -18,6 +19,8 @@ interface RPGLevelsSettings {
 	streakDays: number;
 	dailyXpAwarded: boolean;
 	initializedNoteCount: boolean;
+	editDebounceTime: number; // Time in milliseconds to wait before awarding edit XP
+	minEditLength: number; // Minimum number of characters changed to award XP
 }
 
 const DEFAULT_SETTINGS: RPGLevelsSettings = {
@@ -41,7 +44,9 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
 	lastActive: '',
 	streakDays: 0,
 	dailyXpAwarded: false,
-	initializedNoteCount: false
+	initializedNoteCount: false,
+	editDebounceTime: 10000, // Default: 10 seconds
+	minEditLength: 20 // Default: 20 characters
 };
 
 // Define a type for achievement info
@@ -61,6 +66,11 @@ export default class RPGLevelsPlugin extends Plugin {
 	linkCount: number = 0;
 	noteCount: number = 0;
 	isInitializing: boolean = true; // Flag to track initialization state
+	
+	// New variables for edit tracking
+	private editTimer: NodeJS.Timeout | null = null;
+	private currentEditFile: string | null = null;
+	private originalContent: string = '';
 	
 	async onload() {
 		await this.loadSettings();
@@ -101,10 +111,22 @@ export default class RPGLevelsPlugin extends Plugin {
 				})
 			);
 			
+			// Modified to start tracking edits
+			this.registerEvent(
+				this.app.workspace.on('file-open', async (file) => {
+					if (file instanceof TFile && file.extension === 'md') {
+						// Store the original content when a file is opened
+						this.currentEditFile = file.path;
+						this.originalContent = await this.app.vault.read(file);
+					}
+				})
+			);
+			
+			// Track when a file is modified
 			this.registerEvent(
 				this.app.vault.on('modify', (file) => {
-					if (file instanceof TFile && file.extension === 'md') {
-						this.awardXP('editNote', `Edited note: +${this.settings.xpGainRates.editNote}XP`);
+					if (file instanceof TFile && file.extension === 'md' && !this.isInitializing) {
+						this.handleFileModified(file);
 					}
 				})
 			);
@@ -160,7 +182,43 @@ export default class RPGLevelsPlugin extends Plugin {
 		});
 	}
 	
+	// New method to handle file modifications
+	async handleFileModified(file: TFile) {
+		// Clear any existing timer
+		if (this.editTimer) {
+			clearTimeout(this.editTimer);
+		}
+		
+		// Set a new timer to award XP after the debounce time
+		this.editTimer = setTimeout(async () => {
+			try {
+				// Only process if this is the currently edited file
+				if (this.currentEditFile === file.path && this.originalContent) {
+					// Read the new content
+					const newContent = await this.app.vault.read(file);
+					
+					// Calculate the difference in content length as a simple way to measure edit size
+					const contentDifference = Math.abs(newContent.length - this.originalContent.length);
+					
+					// Only award XP if the edit is significant
+					if (contentDifference >= this.settings.minEditLength) {
+						this.awardXP('editNote', `Completed edit: +${this.settings.xpGainRates.editNote}XP`);
+						// Update the original content to the new state
+						this.originalContent = newContent;
+					}
+				}
+			} catch (error) {
+				console.error("Error processing file edit:", error);
+			}
+		}, this.settings.editDebounceTime);
+	}
+	
 	onunload() {
+		// Clear any pending timers
+		if (this.editTimer) {
+			clearTimeout(this.editTimer);
+		}
+		
 		// Save settings when plugin unloads
 		this.saveSettings();
 	}
@@ -168,9 +226,15 @@ export default class RPGLevelsPlugin extends Plugin {
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 		
-		// Make sure the new initializedNoteCount property exists
+		// Make sure the new properties exist
 		if (this.settings.initializedNoteCount === undefined) {
 			this.settings.initializedNoteCount = false;
+		}
+		if (this.settings.editDebounceTime === undefined) {
+			this.settings.editDebounceTime = DEFAULT_SETTINGS.editDebounceTime;
+		}
+		if (this.settings.minEditLength === undefined) {
+			this.settings.minEditLength = DEFAULT_SETTINGS.minEditLength;
 		}
 	}
 	
@@ -459,6 +523,28 @@ class RPGLevelsSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.xpGainRates.editNote)
 				.onChange(async (value) => {
 					this.plugin.settings.xpGainRates.editNote = value;
+					await this.plugin.saveSettings();
+				}));
+				
+		new Setting(containerEl)
+			.setName('Edit cooldown time')
+			.setDesc('Time to wait (in seconds) before awarding XP for edits')
+			.addSlider(slider => slider
+				.setLimits(1, 60, 1)
+				.setValue(this.plugin.settings.editDebounceTime / 1000)
+				.onChange(async (value) => {
+					this.plugin.settings.editDebounceTime = value * 1000; // Convert to milliseconds
+					await this.plugin.saveSettings();
+				}));
+				
+		new Setting(containerEl)
+			.setName('Minimum edit length')
+			.setDesc('Minimum number of characters changed to award XP')
+			.addSlider(slider => slider
+				.setLimits(5, 100, 5)
+				.setValue(this.plugin.settings.minEditLength)
+				.onChange(async (value) => {
+					this.plugin.settings.minEditLength = value;
 					await this.plugin.saveSettings();
 				}));
 		

@@ -10,6 +10,9 @@ interface RPGLevelsSettings {
 		createLink: number;
 		addTag: number;
 		dailyStreak: number;
+		taskEasy: number;
+        taskMedium: number; 
+        taskHard: number;
 	};
 	achievements: {
 		[key: string]: boolean;
@@ -31,7 +34,10 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
 		editNote: 5,
 		createLink: 3,
 		addTag: 2,
-		dailyStreak: 20
+		dailyStreak: 20,
+		taskEasy: 5,
+        taskMedium: 15,
+        taskHard: 30
 	},
 	achievements: {
 		"first_note": false,
@@ -108,7 +114,7 @@ export default class RPGLevelsPlugin extends Plugin {
 							this.checkAchievements();
 						}
 					}
-				})
+				}),
 			);
 			
 			// Modified to start tracking edits and initialize the current file right away
@@ -164,6 +170,62 @@ export default class RPGLevelsPlugin extends Plugin {
 						
 						if (currentTags.length > prevTags.length) {
 							this.awardXP('addTag', `Added tag: +${this.settings.xpGainRates.addTag}XP`);
+						}
+					}
+				})
+			);
+			// Track task completion
+			this.registerEvent(
+				this.app.workspace.on('editor-change', (editor) => {
+					// Get the active view to determine which file is being edited
+					const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+					
+					// Only proceed if we have a valid markdown view
+					if (view && view.file) {
+						// Get the name of the file being edited
+						const fileName = view.file.basename;
+						
+						// Check if this is a daily tasks note (by checking the filename)
+						if (fileName.includes('Daily Tasks') || fileName.includes('daily tasks')) {
+							// Get the current text and cursor position
+							const text = editor.getValue();
+							const cursorPos = editor.getCursor();
+							const line = editor.getLine(cursorPos.line);
+							
+							// This regex checks for a task that was just checked AND has a difficulty tag
+							// But doesn't already have the "completed" marker
+							if (line.match(/- \[x\] .+#(easy|medium|hard)/i) && 
+								!line.match(/- \[x\] .+#(easy|medium|hard) \(completed\)/i)) {
+								
+								// Determine which difficulty level this task has
+								let xpAmount = this.settings.xpGainRates.taskEasy; // Default
+								let difficultyName = 'easy';
+								
+								if (line.toLowerCase().includes('#medium')) {
+									xpAmount = this.settings.xpGainRates.taskMedium;
+									difficultyName = 'medium';
+								}
+								if (line.toLowerCase().includes('#hard')) {
+									xpAmount = this.settings.xpGainRates.taskHard;
+									difficultyName = 'hard';
+								}
+								
+								// Add XP directly without using awardXP to avoid type issues
+								this.settings.currentXP += xpAmount;
+								
+								// Check if level up
+								if (this.settings.currentXP >= this.settings.xpToNextLevel) {
+									this.levelUp();
+								} else {
+									this.updateStatusBar();
+									this.saveSettings();
+									new Notice(`Completed ${difficultyName} task: +${xpAmount}XP`);
+								}
+								
+								// Mark task as completed to prevent giving XP multiple times
+								const newLine = line + ' (completed)';
+								editor.setLine(cursorPos.line, newLine);
+							}
 						}
 					}
 				})
@@ -628,5 +690,37 @@ class RPGLevelsSettingTab extends PluginSettingTab {
 						this.display();
 					}
 				}));
+		new Setting(containerEl)
+		.setName('XP for easy tasks')
+		.setDesc('How much XP to award when completing an easy task (#easy)')
+		.addSlider(slider => slider
+			.setLimits(1, 30, 1)
+			.setValue(this.plugin.settings.xpGainRates.taskEasy)
+			.onChange(async (value) => {
+				this.plugin.settings.xpGainRates.taskEasy = value;
+				await this.plugin.saveSettings();
+			}));
+	
+	new Setting(containerEl)
+		.setName('XP for medium tasks')
+		.setDesc('How much XP to award when completing a medium task (#medium)')
+		.addSlider(slider => slider
+			.setLimits(5, 50, 1)
+			.setValue(this.plugin.settings.xpGainRates.taskMedium)
+			.onChange(async (value) => {
+				this.plugin.settings.xpGainRates.taskMedium = value;
+				await this.plugin.saveSettings();
+			}));
+	
+	new Setting(containerEl)
+		.setName('XP for hard tasks')
+		.setDesc('How much XP to award when completing a hard task (#hard)')
+		.addSlider(slider => slider
+			.setLimits(10, 100, 5)
+			.setValue(this.plugin.settings.xpGainRates.taskHard)
+			.onChange(async (value) => {
+				this.plugin.settings.xpGainRates.taskHard = value;
+				await this.plugin.saveSettings();
+			}));
 	}
 }

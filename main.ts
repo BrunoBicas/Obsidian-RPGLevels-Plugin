@@ -1,4 +1,4 @@
-import { App, Plugin, PluginSettingTab, Setting, TFile, MarkdownView, Notice } from 'obsidian';
+import { App, Plugin, PluginSettingTab, Setting, TFile, MarkdownView, Notice, Modal } from 'obsidian';
 
 interface RPGLevelsSettings {
 	currentXP: number;
@@ -13,6 +13,17 @@ interface RPGLevelsSettings {
 		taskEasy: number;
         taskMedium: number; 
         taskHard: number;
+	};
+	quests: {
+		[id: string]: {
+			title: string;
+			description: string;
+			xpReward: number;
+			respawnDays: number; // How many days before the quest reappears
+			lastCompleted: string; // Date string when last completed
+			availableDate: string; // Optional specific date when the quest is available
+			completed: boolean;
+		}
 	};
 	achievements: {
 		[key: string]: boolean;
@@ -29,6 +40,7 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
 	currentXP: 0,
 	level: 1,
 	xpToNextLevel: 100,
+	quests: {},
 	xpGainRates: {
 		createNote: 10,
 		editNote: 5,
@@ -244,6 +256,14 @@ export default class RPGLevelsPlugin extends Plugin {
 			name: 'View RPG Stats',
 			callback: () => {
 				this.showStatsModal();
+			}
+		});
+
+		this.addCommand({
+			id: 'view-quests',
+			name: 'View Available Quests',
+			callback: () => {
+				this.showQuestsModal();
 			}
 		});
 	}
@@ -556,6 +576,96 @@ export default class RPGLevelsPlugin extends Plugin {
 		});
 	}
 	
+	showQuestsModal() {
+		// Get today's date as string
+		const today = new Date().toISOString().split('T')[0];
+		
+		// Filter available quests (not completed or respawn time has passed)
+		const availableQuests = Object.entries(this.settings.quests).filter(([id, quest]) => {
+			// If the quest has a specific available date, check if it's today
+			if (quest.availableDate && quest.availableDate !== today) {
+				return false;
+			}
+			
+			// If the quest is completed, check if respawn time has passed
+			if (quest.lastCompleted) {
+				const lastCompletedDate = new Date(quest.lastCompleted);
+				const respawnDate = new Date(lastCompletedDate);
+				respawnDate.setDate(respawnDate.getDate() + quest.respawnDays);
+				
+				if (new Date() < respawnDate) {
+					return false;
+				}
+			}
+			
+			return !quest.completed || quest.respawnDays > 0;
+		});
+		
+		const questsHtml = `
+			<div style="padding: 20px;">
+				<h2>Available Quests</h2>
+				
+				${availableQuests.length > 0 ? `
+					<div style="margin-top: 20px;">
+						${availableQuests.map(([id, quest]) => `
+							<div style="margin-bottom: 20px; background-color: var(--background-secondary); padding: 15px; border-radius: 5px;">
+								<h3 style="margin-top: 0;">${quest.title}</h3>
+								<p>${quest.description}</p>
+								<div style="display: flex; justify-content: space-between; align-items: center;">
+									<span style="font-weight: bold;">Reward: ${quest.xpReward} XP</span>
+									<button class="mod-cta complete-quest" data-quest-id="${id}">Complete Quest</button>
+								</div>
+							</div>
+						`).join('')}
+					</div>
+				` : `
+					<div style="text-align: center; margin-top: 30px;">
+						<p>No available quests. Create some in the plugin settings!</p>
+					</div>
+				`}
+			</div>
+		`;
+		
+		const modalDiv = document.createElement('div');
+		modalDiv.innerHTML = questsHtml;
+		
+		// Add event listeners to Complete Quest buttons
+		modalDiv.querySelectorAll('.complete-quest').forEach(button => {
+			button.addEventListener('click', (e) => {
+				const questId = (e.target as HTMLElement).dataset.questId;
+				if (questId && this.settings.quests[questId]) {
+					const quest = this.settings.quests[questId];
+					
+					// Award XP
+					this.settings.currentXP += quest.xpReward;
+					
+					// Mark as completed
+					quest.completed = true;
+					quest.lastCompleted = new Date().toISOString().split('T')[0];
+					
+					// Check for level up
+					if (this.settings.currentXP >= this.settings.xpToNextLevel) {
+						this.levelUp();
+					} else {
+						this.updateStatusBar();
+						this.saveSettings();
+					}
+					
+					// Show notification
+					new Notice(`Quest completed: ${quest.title} (+${quest.xpReward}XP)`);
+					
+					// Close and reopen modal to refresh
+					modal.close();
+					this.showQuestsModal();
+				}
+			});
+		});
+		
+		const modal = new Modal(this.app);
+		modal.contentEl.appendChild(modalDiv);
+		modal.open();
+	}
+	
 	getAchievementInfo(key: string): AchievementInfo {
 		const achievements: AchievementsDict = {
 			"first_note": { title: "First Note Created", description: "You've begun your knowledge journey!" },
@@ -722,5 +832,146 @@ class RPGLevelsSettingTab extends PluginSettingTab {
 				this.plugin.settings.xpGainRates.taskHard = value;
 				await this.plugin.saveSettings();
 			}));
+
+			containerEl.createEl('h3', { text: 'Quest Management' });
+
+			// Display existing quests
+			const questContainer = containerEl.createDiv();
+			questContainer.addClass('quests-container');
+			questContainer.style.marginBottom = '20px';
+			
+			Object.entries(this.plugin.settings.quests).forEach(([id, quest]) => {
+				const questEl = questContainer.createDiv();
+				questEl.addClass('quest-item');
+				questEl.style.marginBottom = '10px';
+				questEl.style.padding = '10px';
+				questEl.style.backgroundColor = 'var(--background-secondary)';
+				questEl.style.borderRadius = '5px';
+				
+				const header = questEl.createDiv();
+				header.style.display = 'flex';
+				header.style.justifyContent = 'space-between';
+				header.style.marginBottom = '5px';
+				
+				const title = header.createEl('h4');
+				title.setText(quest.title);
+				title.style.margin = '0';
+				
+				const controlButtons = header.createDiv();
+				
+				const deleteButton = controlButtons.createEl('button');
+				deleteButton.setText('Delete');
+				deleteButton.addEventListener('click', async () => {
+					delete this.plugin.settings.quests[id];
+					await this.plugin.saveSettings();
+					this.display();
+				});
+				
+				questEl.createEl('p', { text: quest.description });
+				questEl.createEl('p', { text: `Reward: ${quest.xpReward} XP` });
+				questEl.createEl('p', { text: `Respawn after: ${quest.respawnDays} days` });
+				if (quest.availableDate) {
+					questEl.createEl('p', { text: `Available on: ${quest.availableDate}` });
+				}
+				if (quest.lastCompleted) {
+					questEl.createEl('p', { text: `Last completed: ${quest.lastCompleted}` });
+				}
+			});
+			
+			// Add new quest
+			containerEl.createEl('h4', { text: 'Add New Quest' });
+			
+			const questForm = containerEl.createDiv();
+			questForm.style.backgroundColor = 'var(--background-secondary)';
+			questForm.style.padding = '15px';
+			questForm.style.borderRadius = '5px';
+			
+			let newQuest = {
+				title: '',
+				description: '',
+				xpReward: 50,
+				respawnDays: 1,
+				availableDate: '',
+				completed: false,
+				lastCompleted: ''
+			};
+			
+			new Setting(questForm)
+				.setName('Quest Title')
+				.addText(text => text
+					.setPlaceholder('Quest title')
+					.onChange(value => {
+						newQuest.title = value;
+					}));
+			
+			new Setting(questForm)
+				.setName('Quest Description')
+				.addTextArea(text => text
+					.setPlaceholder('What needs to be done to complete this quest?')
+					.onChange(value => {
+						newQuest.description = value;
+					}));
+			
+			new Setting(questForm)
+				.setName('XP Reward')
+				.addSlider(slider => slider
+					.setLimits(10, 200, 5)
+					.setValue(50)
+					.setDynamicTooltip()
+					.onChange(value => {
+						newQuest.xpReward = value;
+					}));
+			
+			new Setting(questForm)
+				.setName('Respawn Days')
+				.setDesc('Days before the quest becomes available again after completion (0 for one-time quests)')
+				.addSlider(slider => slider
+					.setLimits(0, 30, 1)
+					.setValue(1)
+					.setDynamicTooltip()
+					.onChange(value => {
+						newQuest.respawnDays = value;
+					}));
+			
+			new Setting(questForm)
+				.setName('Available Date (Optional)')
+				.setDesc('If set, the quest will only be available on this specific date')
+				.addText(text => text
+					.setPlaceholder('YYYY-MM-DD')
+					.onChange(value => {
+						newQuest.availableDate = value;
+					}));
+			
+			new Setting(questForm)
+				.addButton(button => button
+					.setButtonText('Add Quest')
+					.setCta()
+					.onClick(async () => {
+						if (!newQuest.title || !newQuest.description) {
+							new Notice('Please provide a title and description for the quest');
+							return;
+						}
+						
+						// Generate a unique ID
+						const questId = 'quest_' + Date.now();
+						
+						// Add to settings
+						this.plugin.settings.quests[questId] = newQuest;
+						await this.plugin.saveSettings();
+						
+						// Reset form and refresh
+						newQuest = {
+							title: '',
+							description: '',
+							xpReward: 50,
+							respawnDays: 1,
+							availableDate: '',
+							completed: false,
+							lastCompleted: ''
+						};
+						
+						// Refresh the settings panel
+						this.display();
+					}));
 	}
 }

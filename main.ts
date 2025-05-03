@@ -1,8 +1,18 @@
 import { App, Plugin, PluginSettingTab, Setting, TFile, MarkdownView, Notice, Modal } from 'obsidian';
 
+interface CharacterStats {
+	Strength: number;
+	Dexterity: number;
+	Constitution: number;
+	Intelligence: number;
+	Wisdom: number;
+	Charisma: number;
+}
+
 interface RPGLevelsSettings {
 	currentXP: number;
 	level: number;
+	characterStats: CharacterStats;
 	xpToNextLevel: number;
 	xpGainRates: {
 		createNote: number;
@@ -40,6 +50,14 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
 	currentXP: 0,
 	level: 1,
 	xpToNextLevel: 100,
+	characterStats: {
+		Strength: 10,
+		Dexterity: 10,
+		Constitution: 10,
+		Intelligence: 10,
+		Wisdom: 10,
+		Charisma: 10,
+	  },
 	quests: {},
 	xpGainRates: {
 		createNote: 10,
@@ -96,6 +114,19 @@ export default class RPGLevelsPlugin extends Plugin {
 		// Add status bar item to show current level and XP
 		this.statusBarEl = this.addStatusBarItem();
 		this.updateStatusBar();
+
+		this.addRibbonIcon("dice", "Show Character Stats", () => {
+			new StatsModal(this.app, this).open();
+		});
+		
+		this.addCommand({
+			id: "open-character-stats",
+			name: "Open Character Stats",
+			callback: () => {
+				new StatsModal(this.app, this).open();
+			}
+		});
+		
 		
 		// Add settings tab
 		this.addSettingTab(new RPGLevelsSettingTab(this.app, this));
@@ -371,6 +402,16 @@ export default class RPGLevelsPlugin extends Plugin {
 		this.updateStatusBar();
 		this.saveSettings();
 		this.checkAchievements();
+
+		const statBonus = Math.floor(this.settings.level / 4);
+		this.settings.characterStats = {
+		  Strength: 10 + statBonus,
+		  Dexterity: 10 + statBonus,
+		  Constitution: 10 + statBonus,
+		  Intelligence: 10 + statBonus,
+		  Wisdom: 10 + statBonus,
+		  Charisma: 10 + statBonus,
+		};
 		
 		// Show level up message with more fanfare
 		new Notice(`🎉 LEVEL UP! 🎉 You reached level ${this.settings.level}!`, 5000);
@@ -677,6 +718,91 @@ export default class RPGLevelsPlugin extends Plugin {
 		
 		// Safely return the achievement info or a default if key doesn't exist
 		return achievements[key] || { title: key, description: "" };
+	}
+}
+
+class StatsModal extends Modal {
+	plugin: RPGLevelsPlugin;
+
+	constructor(app: App, plugin: RPGLevelsPlugin) {
+		super(app);
+		this.plugin = plugin;
+	}
+
+	onOpen() {
+		const { contentEl } = this;
+		const stats = this.plugin.settings.characterStats;
+		const level = this.plugin.settings.level;
+
+		contentEl.createEl("button", {
+			text: "Manage Quests",
+			cls: "mod-cta",
+		}).onclick = () => {
+			this.close();
+			new QuestModal(this.app, this.plugin).open();
+		};
+
+		contentEl.createEl("h2", { text: `Level ${level} - Character Stats` });
+
+		for (const [stat, value] of Object.entries(stats)) {
+			contentEl.createEl("p", { text: `${stat}: ${value}` });
+		}
+	}
+
+	onClose() {
+		this.contentEl.empty();
+	}
+}
+
+class QuestModal extends Modal {
+	plugin: RPGLevelsPlugin;
+
+	constructor(app: App, plugin: RPGLevelsPlugin) {
+		super(app);
+		this.plugin = plugin;
+	}
+
+	onOpen() {
+		const { contentEl } = this;
+		contentEl.createEl("h2", { text: "Available Quests" });
+
+		const today = window.moment().startOf("day");
+
+		for (const [id, quest] of Object.entries(this.plugin.settings.quests)) {
+			const availableDate = quest.availableDate ? window.moment(quest.availableDate) : null;
+			const isAvailable = !availableDate || today.isSameOrAfter(availableDate, "day");
+
+			if (quest.completed && !isAvailable) continue;
+
+			const questEl = contentEl.createDiv({ cls: "quest-item" });
+			questEl.createEl("h3", { text: quest.title });
+			questEl.createEl("p", { text: quest.description });
+
+			if (!quest.completed || isAvailable) {
+				const claimBtn = questEl.createEl("button", { text: "Claim XP" });
+				claimBtn.onclick = () => {
+					this.plugin.settings.currentXP += quest.xpReward;
+
+					quest.completed = true;
+
+					if (quest.respawnDays > 0) {
+						quest.availableDate = window.moment().add(quest.respawnDays, "days").format("YYYY-MM-DD");
+					} else {
+						quest.availableDate = "";
+					}
+
+					this.plugin.saveSettings();
+					new Notice(`Claimed ${quest.xpReward} XP from "${quest.title}"`);
+					this.close();
+				};
+			} else {
+				questEl.createEl("p", { text: "Quest unavailable until " + quest.availableDate });
+			}
+		}
+	}
+
+	onClose() {
+		this.contentEl.empty();
 	}
 }
 

@@ -1,4 +1,4 @@
-import { App, Plugin, PluginSettingTab, Setting, TFile, MarkdownView, Notice, Modal, TFolder, TAbstractFile, FuzzySuggestModal } from 'obsidian';
+import { App, Plugin, PluginSettingTab, Setting, TFile, MarkdownView, Notice, Modal, TFolder, TAbstractFile, FuzzySuggestModal, MarkdownRenderer } from 'obsidian';
 
 interface CharacterStats {
 	Strength: number;
@@ -16,6 +16,12 @@ interface RPGLevelsSettings {
 	xpToNextLevel: number;
 	obtainedFeats: string[]; // List of note paths or names
     featFolders: string[]; // All possible feats (also note paths or names)
+	featPoints: number;
+    extraFeatPointsGranted: number; // contador para bônus a cada 200k XP
+    spentFeatPoints: {
+	 feats: string[];
+	 statIncreases: { [stat: string]: number };
+    };
 	xpGainRates: {
 		createNote: number;
 		editNote: number;
@@ -62,6 +68,19 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
 	  },
 	obtainedFeats: [],
     featFolders: [], // You manually populate this in settings
+	featPoints: 0,
+	extraFeatPointsGranted: 0,
+	spentFeatPoints: {
+		feats: [],
+		statIncreases: {
+			Strength: 0,
+			Dexterity: 0,
+			Constitution: 0,
+			Intelligence: 0,
+			Wisdom: 0,
+			Charisma: 0
+		}
+	},
 	quests: {},
 	xpGainRates: {
 		createNote: 10,
@@ -408,7 +427,18 @@ export default class RPGLevelsPlugin extends Plugin {
 		// Check if level up
 		if (this.settings.currentXP >= this.settings.xpToNextLevel) {
 			this.levelUp();
-		} else {
+		} 
+		if (this.settings.level > 20) {
+			const xpSinceLevel20 = this.settings.currentXP + this.getTotalXPUpToLevel(this.settings.level - 1) - this.getTotalXPUpToLevel(20);
+			const bonusPoints = Math.floor(xpSinceLevel20 / 200000);
+		
+			if (bonusPoints > (this.settings.extraFeatPointsGranted || 0)) {
+				const extra = bonusPoints - (this.settings.extraFeatPointsGranted || 0);
+				this.settings.featPoints += extra;
+				this.settings.extraFeatPointsGranted = bonusPoints;
+			}
+		}
+		else {
 			this.updateStatusBar();
 			this.saveSettings();
 			new Notice(message);
@@ -417,6 +447,9 @@ export default class RPGLevelsPlugin extends Plugin {
 	
 	levelUp() {
 		this.settings.level++;
+		if (this.settings.level >= 20) {
+			this.settings.featPoints = (this.settings.featPoints || 0) + 1;
+		}
 		this.settings.currentXP = this.settings.currentXP - this.settings.xpToNextLevel;
 		this.settings.xpToNextLevel = Math.floor(this.settings.xpToNextLevel * 1.5); // Increase XP required for next level
 		
@@ -437,6 +470,23 @@ export default class RPGLevelsPlugin extends Plugin {
 		// Show level up message with more fanfare
 		new Notice(`🎉 LEVEL UP! 🎉 You reached level ${this.settings.level}!`, 5000);
 	}
+
+	getTotalXPUpToLevel(level: number): number {
+		let xp = 0;
+		let req = 1000;
+		for (let i = 1; i < level; i++) {
+			xp += req;
+			req = Math.floor(req * 1.5);
+		}
+		return xp;
+	}
+	
+	totalSpentFeatPoints(): number {
+		const spentFeats = this.settings.spentFeatPoints?.feats?.length || 0;
+		const spentStats = Object.values(this.settings.spentFeatPoints?.statIncreases || {}).reduce((a, b) => a + b, 0);
+		return spentFeats + spentStats;
+	}
+	
 	
 	checkDailyStreak() {
 		const today = new Date().toDateString();
@@ -888,9 +938,22 @@ class FeatsModal extends Modal {
 		if (obtainedFeats.length === 0) {
 			contentEl.createEl("p", { text: "No feats yet." });
 		} else {
-			obtainedFeats.forEach(feat => {
-				contentEl.createEl("p", { text: feat });
+			obtainedFeats.forEach(async feat => {
+				const container = contentEl.createDiv();
+			
+				// Render the link as markdown
+				await MarkdownRenderer.renderMarkdown(`[[${feat}]]`, container, '', this.plugin);
+			
+				// Find the link element and hook up click behavior
+				const linkEl = container.querySelector("a.internal-link");
+				if (linkEl) {
+					linkEl.addEventListener("click", (e) => {
+						e.preventDefault();
+						this.app.workspace.openLinkText(feat, '', false);
+					});
+				}
 			});
+			
 		}
 		
 

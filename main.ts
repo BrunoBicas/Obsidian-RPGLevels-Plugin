@@ -1,4 +1,4 @@
-import { App, Plugin, PluginSettingTab, Setting, TFile, MarkdownView, Notice, Modal } from 'obsidian';
+import { App, Plugin, PluginSettingTab, Setting, TFile, MarkdownView, Notice, Modal, TFolder, TAbstractFile, FuzzySuggestModal } from 'obsidian';
 
 interface CharacterStats {
 	Strength: number;
@@ -14,6 +14,8 @@ interface RPGLevelsSettings {
 	level: number;
 	characterStats: CharacterStats;
 	xpToNextLevel: number;
+	obtainedFeats: string[]; // List of note paths or names
+    featFolders: string[]; // All possible feats (also note paths or names)
 	xpGainRates: {
 		createNote: number;
 		editNote: number;
@@ -58,6 +60,8 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
 		Wisdom: 10,
 		Charisma: 10,
 	  },
+	obtainedFeats: [],
+    featFolders: [], // You manually populate this in settings
 	quests: {},
 	xpGainRates: {
 		createNote: 10,
@@ -298,6 +302,23 @@ export default class RPGLevelsPlugin extends Plugin {
 			}
 		});
 	}
+	getAvailableFeatsFromFolders(): string[] {
+		const feats: string[] = [];
+	
+		for (const folderPath of this.settings.featFolders) {
+			const folder = this.app.vault.getAbstractFileByPath(folderPath);
+			if (folder instanceof TFolder) {
+				for (const file of folder.children) {
+					if (file instanceof TFile && file.extension === "md") {
+						feats.push(file.path);
+					}
+				}
+			}
+		}
+	
+		return feats;
+	}
+	
 
 	// New method to initialize with currently open file
 	async initializeCurrentFile() {
@@ -721,6 +742,38 @@ export default class RPGLevelsPlugin extends Plugin {
 	}
 }
 
+class FolderSuggestModal extends FuzzySuggestModal<TFolder> {
+	app: App;
+	onChooseFolder: (folderPath: string) => void = () => {};
+
+	constructor(app: App) {
+		super(app);
+		this.app = app;
+	}
+
+	getItems(): TFolder[] {
+		const folders: TFolder[] = [];
+
+		const recurse = (folder: TFolder) => {
+			folders.push(folder);
+			for (const child of folder.children) {
+				if (child instanceof TFolder) recurse(child);
+			}
+		};
+
+		recurse(this.app.vault.getRoot());
+		return folders;
+	}
+
+	getItemText(item: TFolder): string {
+		return item.path;
+	}
+
+	onChooseItem(item: TFolder) {
+		this.onChooseFolder(item.path);
+	}
+}
+
 class StatsModal extends Modal {
 	plugin: RPGLevelsPlugin;
 
@@ -741,6 +794,14 @@ class StatsModal extends Modal {
 			this.close();
 			new QuestModal(this.app, this.plugin).open();
 		};
+		contentEl.createEl("button", {
+			text: "Manage Feats",
+			cls: "mod-cta",
+		}).onclick = () => {
+			this.close();
+			new FeatsModal(this.app, this.plugin).open();
+		};
+		
 
 		contentEl.createEl("h2", { text: `Level ${level} - Character Stats` });
 
@@ -805,6 +866,59 @@ class QuestModal extends Modal {
 		this.contentEl.empty();
 	}
 }
+
+class FeatsModal extends Modal {
+	plugin: RPGLevelsPlugin;
+
+	constructor(app: App, plugin: RPGLevelsPlugin) {
+		super(app);
+		this.plugin = plugin;
+	}
+
+	onOpen() {
+		const { contentEl } = this;
+		contentEl.createEl("h2", { text: "Feats" });
+
+		const obtainedFeats = this.plugin.settings.obtainedFeats;
+        const allFeats = this.plugin.getAvailableFeatsFromFolders();
+        const unobtainedFeats = allFeats.filter((f: string) => !obtainedFeats.includes(f));
+		
+
+		contentEl.createEl("h3", { text: "Obtained Feats" });
+		if (obtainedFeats.length === 0) {
+			contentEl.createEl("p", { text: "No feats yet." });
+		} else {
+			obtainedFeats.forEach(feat => {
+				contentEl.createEl("p", { text: feat });
+			});
+		}
+		
+
+		contentEl.createEl("h3", { text: "Unobtained Feats" });
+		if (unobtainedFeats.length === 0) {
+			contentEl.createEl("p", { text: "No feats available." });
+		} else {
+			unobtainedFeats.forEach((feat: string) => {
+				const row = contentEl.createDiv({ cls: "feat-row" });
+				row.createEl("span", { text: feat });
+
+				const pickBtn = row.createEl("button", { text: "Pick Feat" });
+				pickBtn.onclick = () => {
+					this.plugin.settings.obtainedFeats.push(feat);
+					this.plugin.saveSettings();
+					new Notice(`Feat "${feat}" obtained!`);
+					this.close();
+					new FeatsModal(this.app, this.plugin).open(); // Refresh modal
+				};
+			});
+		}
+	}
+
+	onClose() {
+		this.contentEl.empty();
+	}
+}
+
 
 class RPGLevelsSettingTab extends PluginSettingTab {
 	plugin: RPGLevelsPlugin;
@@ -1099,5 +1213,41 @@ class RPGLevelsSettingTab extends PluginSettingTab {
 						// Refresh the settings panel
 						this.display();
 					}));
+
+					new Setting(containerEl)
+	.setName("Feats Folder Paths")
+	.setDesc("Select folders that contain feat notes.")
+	.addButton(button => {
+		button.setButtonText("Add Folder");
+		button.onClick(async () => {
+			// Use Obsidian's folder suggestion modal
+			const folderModal = new FolderSuggestModal(this.app);
+			folderModal.open();
+
+			folderModal.onChooseFolder = (folderPath: string) => {
+				if (!this.plugin.settings.featFolders.includes(folderPath)) {
+					this.plugin.settings.featFolders.push(folderPath);
+					this.plugin.saveSettings();
+					this.display(); // Refresh settings UI
+				}
+			};
+		});
+	});
+
+this.plugin.settings.featFolders.forEach((folderPath, index) => {
+	new Setting(containerEl)
+		.setName(`📁 ${folderPath}`)
+		.addButton(button =>
+			button
+				.setButtonText("❌")
+				.setTooltip("Remove")
+				.onClick(() => {
+					this.plugin.settings.featFolders.splice(index, 1);
+					this.plugin.saveSettings();
+					this.display(); // Refresh
+				})
+		);
+});
+
 	}
 }

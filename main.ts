@@ -466,6 +466,12 @@ export default class RPGLevelsPlugin extends Plugin {
 		  Wisdom: 10 + statBonus,
 		  Charisma: 10 + statBonus,
 		};
+
+		const featLevels = [2, 4, 8, 12, 16, 19];
+		if (featLevels.includes(this.settings.level)) {
+			this.settings.featPoints = (this.settings.featPoints ?? 0) + 1;
+			new Notice(`Ganhou 1 Feat Point por alcançar o nível ${this.settings.level}!`);
+		}
 		
 		// Show level up message with more fanfare
 		new Notice(`🎉 LEVEL UP! 🎉 You reached level ${this.settings.level}!`, 5000);
@@ -647,6 +653,7 @@ export default class RPGLevelsPlugin extends Plugin {
 		const achievementsEarned = Object.values(this.settings.achievements).filter(Boolean).length;
 		const achievementsTotal = Object.keys(this.settings.achievements).length;
 		
+		
 		const statsHtml = `
 			<div style="padding: 20px;">
 				<h2>Your Knowledge Journey Stats</h2>
@@ -713,6 +720,7 @@ export default class RPGLevelsPlugin extends Plugin {
 			return !quest.completed || quest.respawnDays > 0;
 		});
 		
+		
 		const questsHtml = `
 			<div style="padding: 20px;">
 				<h2>Available Quests</h2>
@@ -761,6 +769,7 @@ export default class RPGLevelsPlugin extends Plugin {
 					} else {
 						this.updateStatusBar();
 						this.saveSettings();
+
 					}
 					
 					// Show notification
@@ -836,6 +845,8 @@ class StatsModal extends Modal {
 		const { contentEl } = this;
 		const stats = this.plugin.settings.characterStats;
 		const level = this.plugin.settings.level;
+		contentEl.createEl("h3", { text: `Feat Points disponíveis: ${this.plugin.settings.featPoints ?? 0}` });
+
 
 		contentEl.createEl("button", {
 			text: "Manage Quests",
@@ -858,6 +869,63 @@ class StatsModal extends Modal {
 		for (const [stat, value] of Object.entries(stats)) {
 			contentEl.createEl("p", { text: `${stat}: ${value}` });
 		}
+
+		contentEl.createEl("button", {
+			text: "Usar Feat Point para aumentar atributo",
+			cls: "mod-cta",
+		}).onclick = () => {
+			if ((this.plugin.settings.featPoints ?? 0) <= 0) {
+				new Notice("Você não tem Feat Points disponíveis.");
+				return;
+			}
+		
+			const plugin = this.plugin;
+			const parentModal = this;
+		
+			new class extends FuzzySuggestModal<string> {
+				stats: CharacterStats;
+				plugin: RPGLevelsPlugin;
+				parentModal: Modal;
+		
+				constructor(app: App, plugin: RPGLevelsPlugin, stats: CharacterStats, parentModal: Modal) {
+					super(app);
+					this.plugin = plugin;
+					this.stats = stats;
+					this.parentModal = parentModal;
+				}
+		
+				getItems(): string[] {
+					return Object.keys(this.stats);
+				}
+		
+				getItemText(item: string): string {
+					return item;
+				}
+		
+				onChooseItem(item: string): void {
+					const statKey = item as keyof CharacterStats;
+					const atual = this.stats[statKey];
+		
+					if (atual >= 30) {
+						new Notice(`${statKey} já está no máximo (30).`);
+						return;
+					}
+		
+					this.stats[statKey]++;
+					if (this.plugin.settings.featPoints !== undefined) {
+						this.plugin.settings.featPoints--;
+					}
+		
+					this.plugin.saveSettings().then(() => {
+						new Notice(`${statKey} aumentado para ${this.stats[statKey]}!`);
+						this.parentModal.close();
+						new StatsModal(this.app, this.plugin).open();
+					});
+				}
+			}(this.app, plugin, this.plugin.settings.characterStats, parentModal).open();
+		};
+		
+		
 	}
 
 	onClose() {
@@ -928,6 +996,8 @@ class FeatsModal extends Modal {
 	onOpen() {
 		const { contentEl } = this;
 		contentEl.createEl("h2", { text: "Feats" });
+		contentEl.createEl("h3", { text: `Feat Points disponíveis: ${this.plugin.settings.featPoints ?? 0}` });
+
 
 		const obtainedFeats = this.plugin.settings.obtainedFeats;
         const allFeats = this.plugin.getAvailableFeatsFromFolders();
@@ -966,13 +1036,18 @@ class FeatsModal extends Modal {
 				row.createEl("span", { text: feat });
 
 				const pickBtn = row.createEl("button", { text: "Pick Feat" });
-				pickBtn.onclick = () => {
-					this.plugin.settings.obtainedFeats.push(feat);
-					this.plugin.saveSettings();
-					new Notice(`Feat "${feat}" obtained!`);
-					this.close();
-					new FeatsModal(this.app, this.plugin).open(); // Refresh modal
+				pickBtn.onclick = async () => {
+				  if ((this.plugin.settings.featPoints ?? 0) <= 0) {
+					new Notice("Você não tem pontos de feat suficientes.");
+					return;
+				  }
+				  this.plugin.settings.obtainedFeats.push(feat);
+				  this.plugin.settings.featPoints--;
+				  await this.plugin.saveSettings();
+				  this.close();
+				  new FeatsModal(this.app, this.plugin).open();
 				};
+				
 			});
 		}
 	}
@@ -1311,6 +1386,21 @@ this.plugin.settings.featFolders.forEach((folderPath, index) => {
 				})
 		);
 });
+
+new Setting(containerEl)
+  .setName("Feat Points")
+  .setDesc("Número atual de Feat Points do personagem.")
+  .addText(text => text
+    .setPlaceholder("0")
+    .setValue(String(this.plugin.settings.featPoints ?? 0))
+    .onChange(async (value) => {
+      const parsed = parseInt(value);
+      if (!isNaN(parsed) && parsed >= 0) {
+        this.plugin.settings.featPoints = parsed;
+        await this.plugin.saveSettings();
+      }
+    }));
+
 
 	}
 }

@@ -31,6 +31,7 @@ interface RPGLevelsSettings {
 		taskEasy: number;
         taskMedium: number; 
         taskHard: number;
+		questComplete: number;
 	};
 	quests: {
 		[id: string]: {
@@ -90,7 +91,8 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
 		dailyStreak: 20,
 		taskEasy: 5,
         taskMedium: 15,
-        taskHard: 30
+        taskHard: 30,
+		questComplete: 0 // Pode deixar como 0, já que o valor real virá do próprio quest
 	},
 	achievements: {
 		"first_note": false,
@@ -417,12 +419,12 @@ export default class RPGLevelsPlugin extends Plugin {
 		this.statusBarEl.setText(`Level ${this.settings.level} | XP: ${this.settings.currentXP}/${this.settings.xpToNextLevel}`);
 	}
 	
-	awardXP(type: keyof typeof DEFAULT_SETTINGS.xpGainRates, message: string) {
+	awardXP(type: keyof typeof DEFAULT_SETTINGS.xpGainRates, message: string, customXPAmount?: number) {
 		// Don't award XP during initialization
 		if (this.isInitializing) return;
 		
-		const xpAmount = this.settings.xpGainRates[type];
-		this.settings.currentXP += xpAmount;
+		const xpAmount = customXPAmount ?? this.settings.xpGainRates[type];
+	    this.settings.currentXP += xpAmount;
 		
 		// Check if level up
 		if (this.settings.currentXP >= this.settings.xpToNextLevel) {
@@ -764,13 +766,7 @@ export default class RPGLevelsPlugin extends Plugin {
 					quest.lastCompleted = new Date().toISOString().split('T')[0];
 					
 					// Check for level up
-					if (this.settings.currentXP >= this.settings.xpToNextLevel) {
-						this.levelUp();
-					} else {
-						this.updateStatusBar();
-						this.saveSettings();
-
-					}
+					this.awardXP("taskEasy", `Quest completed: ${quest.title} (+${quest.xpReward}XP)`);
 					
 					// Show notification
 					new Notice(`Quest completed: ${quest.title} (+${quest.xpReward}XP)`);
@@ -934,56 +930,56 @@ class StatsModal extends Modal {
 }
 
 class QuestModal extends Modal {
-	plugin: RPGLevelsPlugin;
+    plugin: RPGLevelsPlugin;
 
-	constructor(app: App, plugin: RPGLevelsPlugin) {
-		super(app);
-		this.plugin = plugin;
-	}
+    constructor(app: App, plugin: RPGLevelsPlugin) {
+        super(app);
+        this.plugin = plugin;
+    }
 
-	onOpen() {
-		const { contentEl } = this;
-		contentEl.createEl("h2", { text: "Available Quests" });
+    onOpen() {
+        const { contentEl } = this;
+        contentEl.createEl("h2", { text: "Available Quests" });
 
-		const today = window.moment().startOf("day");
+        const today = window.moment().startOf("day");
 
-		for (const [id, quest] of Object.entries(this.plugin.settings.quests)) {
-			const availableDate = quest.availableDate ? window.moment(quest.availableDate) : null;
-			const isAvailable = !availableDate || today.isSameOrAfter(availableDate, "day");
+        for (const [id, quest] of Object.entries(this.plugin.settings.quests)) {
+            const availableDate = quest.availableDate ? window.moment(quest.availableDate) : null;
+            const isAvailable = !availableDate || today.isSameOrAfter(availableDate, "day");
 
-			if (quest.completed && !isAvailable) continue;
+            if (!quest.completed || isAvailable) {
+                const questEl = contentEl.createDiv({ cls: "quest-item" });
+                questEl.createEl("h3", { text: quest.title });
+                questEl.createEl("p", { text: quest.description });
 
-			const questEl = contentEl.createDiv({ cls: "quest-item" });
-			questEl.createEl("h3", { text: quest.title });
-			questEl.createEl("p", { text: quest.description });
+                const claimBtn = questEl.createEl("button", { text: "Claim XP" });
+                claimBtn.onclick = () => {
+                    const xpAmount = quest.xpReward;
+                    // Use awardXP to handle level-up logic
+                    this.plugin.awardXP("questComplete", `Quest completed: ${quest.title} (+${xpAmount}XP)`, xpAmount);
 
-			if (!quest.completed || isAvailable) {
-				const claimBtn = questEl.createEl("button", { text: "Claim XP" });
-				claimBtn.onclick = () => {
-					this.plugin.settings.currentXP += quest.xpReward;
+                    // Mark quest as completed and set respawn
+                    quest.completed = true;
+                    if (quest.respawnDays > 0) {
+                        quest.availableDate = window.moment().add(quest.respawnDays, "days").format("YYYY-MM-DD");
+                    } else {
+                        quest.availableDate = "";
+                    }
 
-					quest.completed = true;
+                    this.plugin.saveSettings();
+                    this.close();
+                };
+            } else {
+                contentEl.createEl("p", { text: "Quest unavailable until " + quest.availableDate });
+            }
+        }
+    }
 
-					if (quest.respawnDays > 0) {
-						quest.availableDate = window.moment().add(quest.respawnDays, "days").format("YYYY-MM-DD");
-					} else {
-						quest.availableDate = "";
-					}
-
-					this.plugin.saveSettings();
-					new Notice(`Claimed ${quest.xpReward} XP from "${quest.title}"`);
-					this.close();
-				};
-			} else {
-				questEl.createEl("p", { text: "Quest unavailable until " + quest.availableDate });
-			}
-		}
-	}
-
-	onClose() {
-		this.contentEl.empty();
-	}
+    onClose() {
+        this.contentEl.empty();
+    }
 }
+
 
 class FeatsModal extends Modal {
 	plugin: RPGLevelsPlugin;

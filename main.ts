@@ -930,65 +930,92 @@ class StatsModal extends Modal {
 }
 
 class QuestModal extends Modal {
-    plugin: RPGLevelsPlugin;
+	plugin: RPGLevelsPlugin;
 
-    constructor(app: App, plugin: RPGLevelsPlugin) {
-        super(app);
-        this.plugin = plugin;
-    }
+	constructor(app: App, plugin: RPGLevelsPlugin) {
+		super(app);
+		this.plugin = plugin;
+	}
 
-    onOpen() {
-        const { contentEl } = this;
-        contentEl.createEl("h2", { text: "Available Quests" });
+	onOpen() {
+		const { contentEl } = this;
+		contentEl.createEl("h2", { text: "Available Quests" });
 
-        const today = window.moment();
-        const todayFormatted = today.format("MM-DD");
+		const today = new Date();
+		const todayMMDD = `${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
-        for (const [id, quest] of Object.entries(this.plugin.settings.quests)) {
-            const questEl = contentEl.createDiv({ cls: "quest-item" });
+		for (const [id, quest] of Object.entries(this.plugin.settings.quests)) {
+			const questEl = contentEl.createDiv({ cls: "quest-item" });
 
-            const isFixedAnnual = quest.availableDate?.match(/^\d{2}-\d{2}$/);
-            const isTodayFixedDate = quest.availableDate === todayFormatted;
+			let isAvailable = false;
 
-            let isRespawnReady = true;
-            if (quest.lastCompleted && quest.respawnDays > 0) {
-                const lastCompleted = window.moment(quest.lastCompleted);
-                const respawnReadyDate = lastCompleted.clone().add(quest.respawnDays, "days");
-                isRespawnReady = today.isSameOrAfter(respawnReadyDate, "day");
-            }
+			const isRange = quest.availableDate?.includes(" to ");
+			if (isRange) {
+				const [startStr, endStr] = quest.availableDate.split(" to ");
+				const start = this.parseMMDD(startStr);
+				const end = this.parseMMDD(endStr);
+				const now = new Date(2000, today.getMonth(), today.getDate());
 
-            const isAvailable =
-                (isFixedAnnual && isTodayFixedDate) ||
-                (!isFixedAnnual && (!quest.completed || isRespawnReady));
+				const startDate = new Date(2000, start.month - 1, start.day);
+				const endDate = new Date(2000, end.month - 1, end.day);
 
-            if (!isAvailable) {
-                questEl.createEl("p", { text: `Quest unavailable until ${quest.availableDate}` });
-                continue;
-            }
+				isAvailable = now >= startDate && now <= endDate;
+			}
+			else if (/^\\d{2}-\\d{2}$/.test(quest.availableDate)) {
+				isAvailable = quest.availableDate === todayMMDD;
+			}
+			else {
+				// Se não tem availableDate fixa, usa respawnDays
+				isAvailable = true;
+				if (quest.lastCompleted && quest.respawnDays > 0) {
+					const last = new Date(quest.lastCompleted);
+					const respawn = new Date(last);
+					respawn.setDate(respawn.getDate() + quest.respawnDays);
+					isAvailable = today >= respawn;
+				}
+			}
 
-            questEl.createEl("h3", { text: quest.title });
-            questEl.createEl("p", { text: quest.description });
+			if (!isAvailable) {
+				questEl.createEl("p", { text: `Quest unavailable until ${quest.availableDate}` });
+				continue;
+			}
 
-            const claimBtn = questEl.createEl("button", { text: "Claim XP" });
-            claimBtn.onclick = () => {
-                const xpAmount = quest.xpReward;
-                this.plugin.awardXP("questComplete", `Quest completed: ${quest.title} (+${xpAmount}XP)`, xpAmount);
+			questEl.createEl("h3", { text: quest.title });
+			questEl.createEl("p", { text: quest.description });
 
-                quest.completed = true;
-                if (!isFixedAnnual && quest.respawnDays > 0) {
-                    quest.availableDate = window.moment().add(quest.respawnDays, "days").format("YYYY-MM-DD");
-                }
+			const claimBtn = questEl.createEl("button", { text: "Claim XP" });
+			claimBtn.onclick = () => {
+				const xpAmount = quest.xpReward;
+				this.plugin.awardXP("questComplete", `Quest completed: ${quest.title} (+${xpAmount}XP)`, xpAmount);
 
-                this.plugin.saveSettings();
-                this.close();
-            };
-        }
-    }
+				quest.completed = true;
 
-    onClose() {
-        this.contentEl.empty();
-    }
+				// Se for quest comum (não MM-DD ou range), aplica respawn
+				if (!quest.availableDate?.match(/^\\d{2}-\\d{2}$/) && !quest.availableDate?.includes(" to ") && quest.respawnDays > 0) {
+					const newDate = new Date();
+					newDate.setDate(newDate.getDate() + quest.respawnDays);
+					quest.availableDate = newDate.toISOString().split("T")[0];
+				}
+
+				this.plugin.saveSettings();
+				this.close();
+			};
+		}
+	}
+
+	onClose() {
+		this.contentEl.empty();
+	}
+
+	private parseMMDD(str: string): { month: number; day: number } {
+		const [monthStr, dayStr] = str.split("-");
+		return {
+			month: parseInt(monthStr, 10),
+			day: parseInt(dayStr, 10)
+		};
+	}
 }
+
 
 
 class FeatsModal extends Modal {
@@ -1077,6 +1104,17 @@ class RPGLevelsSettingTab extends PluginSettingTab {
 		containerEl.empty();
 		
 		containerEl.createEl('h2', { text: 'RPG Levels Plugin Settings' });
+
+		// Variáveis temporárias
+        let questPeriodStart = '';
+        let questPeriodEnd = '';
+
+        // Função que une as datas de período
+         function updateRangeField() {
+	     if (questPeriodStart && questPeriodEnd) {
+		 newQuest.availableDate = `${questPeriodStart} to ${questPeriodEnd}`;
+	    }
+        }
 		
 		new Setting(containerEl)
 			.setName('XP for creating a new note')
@@ -1318,28 +1356,49 @@ class RPGLevelsSettingTab extends PluginSettingTab {
 					}));
 			
 			new Setting(questForm)
-				.setName('Available Date (Optional)')
-				.setDesc('If set, the quest will only be available on this specific date')
-				.addText(text => text
-					.setPlaceholder('YYYY-MM-DD')
-					.onChange(value => {
-						newQuest.availableDate = value;
-			}));
+	.setName("Specific Date (Optional)")
+	.setDesc("Available only on a specific day of the year (MM-DD)")
+	.addText(text => {
+		text.setPlaceholder("e.g., 12-25")
+			.onChange(value => {
+				const trimmed = value.trim();
+				if (/^\d{2}-\d{2}$/.test(trimmed)) {
+					newQuest.availableDate = trimmed;
+				} else if (trimmed === '') {
+					// Limpa se necessário
+				} else {
+					new Notice("Invalid format. Use MM-DD.");
+				}
+			});
+	});
 
-			new Setting(questForm)
-              .setName('Available Date (Optional)')
-              .setDesc('If set, the quest will only be available on this specific day each year (format: MM-DD)')
-              .addText(text => {
-              text.setPlaceholder('MM-DD')
-              .onChange(value => {
-                // Simple validation
-                if (/^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$/.test(value)) {
-                    newQuest.availableDate = value;
-                } else {
-                    new Notice("Invalid date format. Use MM-DD, e.g., 12-25");
-                }
-            });
-    });
+new Setting(questForm)
+	.setName("Availability Period (Optional)")
+	.setDesc("Available every year between two dates (MM-DD to MM-DD)")
+	.addText(text => {
+		text.setPlaceholder("Start (e.g., 12-20)")
+			.onChange(startVal => {
+				startVal = startVal.trim();
+				if (!/^\d{2}-\d{2}$/.test(startVal) && startVal !== '') {
+					new Notice("Invalid start date format. Use MM-DD.");
+					return;
+				}
+				questPeriodStart = startVal;
+				updateRangeField();
+			});
+	})
+	.addText(text => {
+		text.setPlaceholder("End (e.g., 12-25)")
+			.onChange(endVal => {
+				endVal = endVal.trim();
+				if (!/^\d{2}-\d{2}$/.test(endVal) && endVal !== '') {
+					new Notice("Invalid end date format. Use MM-DD.");
+					return;
+				}
+				questPeriodEnd = endVal;
+				updateRangeField();
+			});
+	});
 
 			
 			

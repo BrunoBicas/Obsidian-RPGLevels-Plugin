@@ -44,6 +44,7 @@ interface RPGLevelsSettings {
 			completed: boolean;
 		}
 	};
+	questNoteLinks?: { [id: string]: string };
 	achievements: {
 		[key: string]: boolean;
 	};
@@ -83,6 +84,7 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
 		}
 	},
 	quests: {},
+	questNoteLinks: {},
 	xpGainRates: {
 		createNote: 10,
 		editNote: 5,
@@ -961,11 +963,10 @@ class QuestModal extends Modal {
 
 				isAvailable = now >= startDate && now <= endDate;
 			}
-			else if (/^\\d{2}-\\d{2}$/.test(quest.availableDate)) {
+			else if (/^\d{2}-\d{2}$/.test(quest.availableDate)) {
 				isAvailable = quest.availableDate === todayMMDD;
 			}
 			else {
-				// Se não tem availableDate fixa, usa respawnDays
 				isAvailable = true;
 				if (quest.lastCompleted && quest.respawnDays > 0) {
 					const last = new Date(quest.lastCompleted);
@@ -983,15 +984,20 @@ class QuestModal extends Modal {
 			questEl.createEl("h3", { text: quest.title });
 			questEl.createEl("p", { text: quest.description });
 
-			const claimBtn = questEl.createEl("button", { text: "Claim XP" });
+			// Container para os botões
+			const buttonsDiv = questEl.createDiv();
+			buttonsDiv.style.display = "flex";
+			buttonsDiv.style.gap = "10px";
+
+			// Botão Claim XP
+			const claimBtn = buttonsDiv.createEl("button", { text: "Claim XP" });
 			claimBtn.onclick = () => {
 				const xpAmount = quest.xpReward;
 				this.plugin.awardXP("questComplete", `Quest completed: ${quest.title} (+${xpAmount}XP)`, xpAmount);
 
 				quest.completed = true;
 
-				// Se for quest comum (não MM-DD ou range), aplica respawn
-				if (!quest.availableDate?.match(/^\\d{2}-\\d{2}$/) && !quest.availableDate?.includes(" to ") && quest.respawnDays > 0) {
+				if (!quest.availableDate?.match(/^\d{2}-\d{2}$/) && !quest.availableDate?.includes(" to ") && quest.respawnDays > 0) {
 					const newDate = new Date();
 					newDate.setDate(newDate.getDate() + quest.respawnDays);
 					quest.availableDate = newDate.toISOString().split("T")[0];
@@ -1000,6 +1006,15 @@ class QuestModal extends Modal {
 				this.plugin.saveSettings();
 				this.close();
 			};
+
+			// Botão Abrir Nota se existir configuração
+			const notePath = this.plugin.settings.questNoteLinks?.[id];
+			if (notePath) {
+				const openNoteBtn = buttonsDiv.createEl("button", { text: "📓 Abrir Nota" });
+				openNoteBtn.onclick = () => {
+					this.app.workspace.openLinkText(notePath, '', false);
+				};
+			}
 		}
 	}
 
@@ -1015,6 +1030,7 @@ class QuestModal extends Modal {
 		};
 	}
 }
+
 
 
 
@@ -1298,6 +1314,20 @@ class RPGLevelsSettingTab extends PluginSettingTab {
 				if (quest.lastCompleted) {
 					questEl.createEl('p', { text: `Last completed: ${quest.lastCompleted}` });
 				}
+				new Setting(questEl)
+	.setName("Nota associada (opcional)")
+	.setDesc("Digite o caminho da nota (ex: 'Quests/MinhaNota.md')")
+	.addText(text => {
+		text.setPlaceholder("Ex: Quests/MinhaNota")
+			.setValue(this.plugin.settings.questNoteLinks?.[id] || "")
+			.onChange(async (value) => {
+				if (!this.plugin.settings.questNoteLinks) {
+					this.plugin.settings.questNoteLinks = {};
+				}
+				this.plugin.settings.questNoteLinks[id] = value.trim();
+				await this.plugin.saveSettings();
+			});
+	});
 			});
 			
 			// Add new quest
@@ -1399,7 +1429,7 @@ new Setting(questForm)
 				updateRangeField();
 			});
 	});
-
+	
 			
 			
 			new Setting(questForm)

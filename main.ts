@@ -941,37 +941,47 @@ class QuestModal extends Modal {
         const { contentEl } = this;
         contentEl.createEl("h2", { text: "Available Quests" });
 
-        const today = window.moment().startOf("day");
+        const today = window.moment();
+        const todayFormatted = today.format("MM-DD");
 
         for (const [id, quest] of Object.entries(this.plugin.settings.quests)) {
-            const availableDate = quest.availableDate ? window.moment(quest.availableDate) : null;
-            const isAvailable = !availableDate || today.isSameOrAfter(availableDate, "day");
+            const questEl = contentEl.createDiv({ cls: "quest-item" });
 
-            if (!quest.completed || isAvailable) {
-                const questEl = contentEl.createDiv({ cls: "quest-item" });
-                questEl.createEl("h3", { text: quest.title });
-                questEl.createEl("p", { text: quest.description });
+            const isFixedAnnual = quest.availableDate?.match(/^\d{2}-\d{2}$/);
+            const isTodayFixedDate = quest.availableDate === todayFormatted;
 
-                const claimBtn = questEl.createEl("button", { text: "Claim XP" });
-                claimBtn.onclick = () => {
-                    const xpAmount = quest.xpReward;
-                    // Use awardXP to handle level-up logic
-                    this.plugin.awardXP("questComplete", `Quest completed: ${quest.title} (+${xpAmount}XP)`, xpAmount);
-
-                    // Mark quest as completed and set respawn
-                    quest.completed = true;
-                    if (quest.respawnDays > 0) {
-                        quest.availableDate = window.moment().add(quest.respawnDays, "days").format("YYYY-MM-DD");
-                    } else {
-                        quest.availableDate = "";
-                    }
-
-                    this.plugin.saveSettings();
-                    this.close();
-                };
-            } else {
-                contentEl.createEl("p", { text: "Quest unavailable until " + quest.availableDate });
+            let isRespawnReady = true;
+            if (quest.lastCompleted && quest.respawnDays > 0) {
+                const lastCompleted = window.moment(quest.lastCompleted);
+                const respawnReadyDate = lastCompleted.clone().add(quest.respawnDays, "days");
+                isRespawnReady = today.isSameOrAfter(respawnReadyDate, "day");
             }
+
+            const isAvailable =
+                (isFixedAnnual && isTodayFixedDate) ||
+                (!isFixedAnnual && (!quest.completed || isRespawnReady));
+
+            if (!isAvailable) {
+                questEl.createEl("p", { text: `Quest unavailable until ${quest.availableDate}` });
+                continue;
+            }
+
+            questEl.createEl("h3", { text: quest.title });
+            questEl.createEl("p", { text: quest.description });
+
+            const claimBtn = questEl.createEl("button", { text: "Claim XP" });
+            claimBtn.onclick = () => {
+                const xpAmount = quest.xpReward;
+                this.plugin.awardXP("questComplete", `Quest completed: ${quest.title} (+${xpAmount}XP)`, xpAmount);
+
+                quest.completed = true;
+                if (!isFixedAnnual && quest.respawnDays > 0) {
+                    quest.availableDate = window.moment().add(quest.respawnDays, "days").format("YYYY-MM-DD");
+                }
+
+                this.plugin.saveSettings();
+                this.close();
+            };
         }
     }
 
@@ -1314,7 +1324,24 @@ class RPGLevelsSettingTab extends PluginSettingTab {
 					.setPlaceholder('YYYY-MM-DD')
 					.onChange(value => {
 						newQuest.availableDate = value;
-					}));
+			}));
+
+			new Setting(questForm)
+              .setName('Available Date (Optional)')
+              .setDesc('If set, the quest will only be available on this specific day each year (format: MM-DD)')
+              .addText(text => {
+              text.setPlaceholder('MM-DD')
+              .onChange(value => {
+                // Simple validation
+                if (/^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$/.test(value)) {
+                    newQuest.availableDate = value;
+                } else {
+                    new Notice("Invalid date format. Use MM-DD, e.g., 12-25");
+                }
+            });
+    });
+
+			
 			
 			new Setting(questForm)
 				.addButton(button => button

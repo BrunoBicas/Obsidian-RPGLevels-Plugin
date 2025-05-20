@@ -48,6 +48,8 @@ interface RPGLevelsSettings {
 	achievements: {
 		[key: string]: boolean;
 	};
+	characterImagePath?: string; // na interface
+    characterNotePath?: string;
 	lastActive: string;
 	streakDays: number;
 	dailyXpAwarded: boolean;
@@ -96,6 +98,8 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
         taskHard: 30,
 		questComplete: 0 // Pode deixar como 0, já que o valor real virá do próprio quest
 	},
+	characterImagePath: '', // em DEFAULT_SETTINGS
+    characterNotePath: '',
 	achievements: {
 		"first_note": false,
 		"reach_level_5": false,
@@ -832,104 +836,128 @@ class FolderSuggestModal extends FuzzySuggestModal<TFolder> {
 }
 
 class StatsModal extends Modal {
-	plugin: RPGLevelsPlugin;
+  plugin: RPGLevelsPlugin;
 
-	constructor(app: App, plugin: RPGLevelsPlugin) {
-		super(app);
-		this.plugin = plugin;
-	}
+  constructor(app: App, plugin: RPGLevelsPlugin) {
+    super(app);
+    this.plugin = plugin;
+  }
 
-	onOpen() {
-		const { contentEl } = this;
-		const stats = this.plugin.settings.characterStats;
-		const level = this.plugin.settings.level;
-		contentEl.createEl("h3", { text: `Feat Points disponíveis: ${this.plugin.settings.featPoints ?? 0}` });
+  onOpen() {
+    const { contentEl } = this;
+    const stats = this.plugin.settings.characterStats;
 
+    // Se houver imagem configurada, renderiza
+    if (this.plugin.settings.characterImagePath) {
+      const imgContainer = contentEl.createDiv();
+      const imgPath = this.plugin.settings.characterImagePath;
+      const file = this.app.vault.getAbstractFileByPath(imgPath);
 
-		contentEl.createEl("button", {
-			text: "Manage Quests",
-			cls: "mod-cta",
-		}).onclick = () => {
-			this.close();
-			new QuestModal(this.app, this.plugin).open();
-		};
-		contentEl.createEl("button", {
-			text: "Manage Feats",
-			cls: "mod-cta",
-		}).onclick = () => {
-			this.close();
-			new FeatsModal(this.app, this.plugin).open();
-		};
-		
+      const exts = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
+      if (file instanceof TFile && exts.includes(file.extension.toLowerCase())) {
+        this.app.vault.readBinary(file).then(data => {
+        const blob = new Blob([data], { type: `image/${file.extension}` });
+      const url = URL.createObjectURL(blob);
+      const img = imgContainer.createEl("img");
+      img.src = url;
+      img.alt = "Character Image";
+      img.style.maxWidth = "250px";           // Tamanho máximo reduzido
+      img.style.display = "block";            // Centralizar
+      img.style.margin = "0 auto 15px auto";  // Centralizar + margem inferior
+      img.style.borderRadius = "10px";        // Cantos arredondados
+        }).catch(err => {
+          console.error("Erro ao ler imagem:", err);
+          imgContainer.createEl("p", { text: `❌ Erro ao carregar imagem.` });
+        });
+      } else {
+        imgContainer.createEl("p", { text: `⚠️ Arquivo de imagem inválido ou não encontrado: ${imgPath}` });
+      }
+    } 
 
-		contentEl.createEl("h2", { text: `Level ${level} - Character Stats` });
+    // Resto do conteúdo do modal
+    const level = this.plugin.settings.level;
+    contentEl.createEl("h3", { text: `Feat Points disponíveis: ${this.plugin.settings.featPoints ?? 0}` });
 
-		for (const [stat, value] of Object.entries(stats)) {
-			contentEl.createEl("p", { text: `${stat}: ${value}` });
-		}
+    contentEl.createEl("button", { text: "Manage Quests", cls: "mod-cta" })
+      .onclick = () => {
+        this.close();
+        new QuestModal(this.app, this.plugin).open();
+      };
 
-		contentEl.createEl("button", {
-			text: "Usar Feat Point para aumentar atributo",
-			cls: "mod-cta",
-		}).onclick = () => {
-			if ((this.plugin.settings.featPoints ?? 0) <= 0) {
-				new Notice("Você não tem Feat Points disponíveis.");
-				return;
-			}
-		
-			const plugin = this.plugin;
-			const parentModal = this;
-		
-			new class extends FuzzySuggestModal<string> {
-				stats: CharacterStats;
-				plugin: RPGLevelsPlugin;
-				parentModal: Modal;
-		
-				constructor(app: App, plugin: RPGLevelsPlugin, stats: CharacterStats, parentModal: Modal) {
-					super(app);
-					this.plugin = plugin;
-					this.stats = stats;
-					this.parentModal = parentModal;
-				}
-		
-				getItems(): string[] {
-					return Object.keys(this.stats);
-				}
-		
-				getItemText(item: string): string {
-					return item;
-				}
-		
-				onChooseItem(item: string): void {
-					const statKey = item as keyof CharacterStats;
-					const atual = this.stats[statKey];
-		
-					if (atual >= 30) {
-						new Notice(`${statKey} já está no máximo (30).`);
-						return;
-					}
-		
-					this.stats[statKey]++;
-					if (this.plugin.settings.featPoints !== undefined) {
-						this.plugin.settings.featPoints--;
-					}
-		
-					this.plugin.saveSettings().then(() => {
-						new Notice(`${statKey} aumentado para ${this.stats[statKey]}!`);
-						this.parentModal.close();
-						new StatsModal(this.app, this.plugin).open();
-					});
-				}
-			}(this.app, plugin, this.plugin.settings.characterStats, parentModal).open();
-		};
-		
-		
-	}
+    contentEl.createEl("button", { text: "Manage Feats", cls: "mod-cta" })
+      .onclick = () => {
+        this.close();
+        new FeatsModal(this.app, this.plugin).open();
+      };
 
-	onClose() {
-		this.contentEl.empty();
-	}
+    if (this.plugin.settings.characterNotePath) {
+      contentEl.createEl("button", { text: "📘 Abrir Página do Personagem", cls: "mod-cta" })
+        .onclick = () => {
+          this.app.workspace.openLinkText(this.plugin.settings.characterNotePath!, '', false);
+        };
+    }
+
+    contentEl.createEl("h2", { text: `Level ${level} - Character Stats` });
+    for (const [stat, value] of Object.entries(stats)) {
+      contentEl.createEl("p", { text: `${stat}: ${value}` });
+    }
+
+    contentEl.createEl("button", { text: "Usar Feat Point para aumentar atributo", cls: "mod-cta" })
+      .onclick = () => {
+        if ((this.plugin.settings.featPoints ?? 0) <= 0) {
+          new Notice("Você não tem Feat Points disponíveis.");
+          return;
+        }
+
+        const plugin = this.plugin;
+        const parentModal = this;
+
+        new class extends FuzzySuggestModal<string> {
+          stats: CharacterStats;
+          plugin: RPGLevelsPlugin;
+          parentModal: Modal;
+
+          constructor(app: App, plugin: RPGLevelsPlugin, stats: CharacterStats, parentModal: Modal) {
+            super(app);
+            this.plugin = plugin;
+            this.stats = stats;
+            this.parentModal = parentModal;
+          }
+
+          getItems(): string[] {
+            return Object.keys(this.stats);
+          }
+          getItemText(item: string): string {
+            return item;
+          }
+          onChooseItem(item: string): void {
+            const statKey = item as keyof CharacterStats;
+            const atual = this.stats[statKey];
+
+            if (atual >= 30) {
+              new Notice(`${statKey} já está no máximo (30).`);
+              return;
+            }
+
+            this.stats[statKey]++;
+            this.plugin.settings.featPoints!--;
+
+            this.plugin.saveSettings().then(() => {
+              new Notice(`${statKey} aumentado para ${this.stats[statKey]}!`);
+              this.parentModal.close();
+              new StatsModal(this.app, this.plugin).open();
+            });
+          }
+        }(this.app, plugin, this.plugin.settings.characterStats, parentModal).open();
+      };
+
+  } 
+
+  onClose() {
+    this.contentEl.empty();
+  }
 }
+
 
 class QuestModal extends Modal {
 	plugin: RPGLevelsPlugin;
@@ -1106,6 +1134,44 @@ class FeatsModal extends Modal {
 	}
 }
 
+const ObsidianHelper = {
+	recurseVault(folder: TFolder, result: TFile[]) {
+		for (const child of folder.children) {
+			if (child instanceof TFile) result.push(child);
+			else if (child instanceof TFolder) ObsidianHelper.recurseVault(child, result);
+		}
+	}
+};
+
+class ImageSuggestModal extends FuzzySuggestModal<TFile> {
+	plugin: RPGLevelsPlugin;
+
+	constructor(app: App, plugin: RPGLevelsPlugin) {
+		super(app);
+		this.plugin = plugin;
+	}
+
+	getItems(): TFile[] {
+  const files: TFile[] = [];
+  ObsidianHelper.recurseVault(this.app.vault.getRoot(), files);
+  // agora testa o path, que contém o ".png", ".jpg" etc
+  return files.filter(f => /\.(png|jpe?g|gif|webp|svg)$/i.test(f.path));
+ }
+
+
+
+	getItemText(item: TFile): string {
+		return item.path;
+	}
+
+	onChooseItem(item: TFile): void {
+		this.plugin.settings.characterImagePath = item.path;
+		this.plugin.saveSettings();
+		new Notice(`Imagem selecionada: ${item.path}`);
+	}
+}
+
+
 
 class RPGLevelsSettingTab extends PluginSettingTab {
 	plugin: RPGLevelsPlugin;
@@ -1272,9 +1338,27 @@ class RPGLevelsSettingTab extends PluginSettingTab {
 			}));
 
 			containerEl.createEl('h3', { text: 'Quest Management' });
+			
+			const toggleBtn = containerEl.createEl('button', {
+	text: '▶ Mostrar Quests',
+});
+toggleBtn.style.marginBottom = '10px';
+toggleBtn.style.cursor = 'pointer';
+
+const questContainer = containerEl.createDiv();
+questContainer.style.display = 'none'; // Começa escondido
+
+let isVisible = false;
+
+toggleBtn.addEventListener('click', () => {
+	isVisible = !isVisible;
+	questContainer.style.display = isVisible ? 'block' : 'none';
+	toggleBtn.setText(isVisible ? '▼ Ocultar Quests' : '▶ Mostrar Quests');
+});
+
 
 			// Display existing quests
-			const questContainer = containerEl.createDiv();
+			
 			questContainer.addClass('quests-container');
 			questContainer.style.marginBottom = '20px';
 			
@@ -1329,6 +1413,44 @@ class RPGLevelsSettingTab extends PluginSettingTab {
 			});
 	});
 			});
+
+			new Setting(containerEl)
+	.setName("Imagem do personagem")
+	.setDesc("Selecione um arquivo de imagem do Vault")
+	.addButton(btn => {
+		btn.setButtonText("Escolher Imagem")
+			.setCta()
+			.onClick(() => {
+				new ImageSuggestModal(this.app, this.plugin).open();
+			});
+	})
+	.addExtraButton(extra => {
+		extra.setIcon("cross")
+			.setTooltip("Limpar imagem")
+			.onClick(async () => {
+				this.plugin.settings.characterImagePath = '';
+				await this.plugin.saveSettings();
+				this.display();
+			});
+	})
+	.addText(text => {
+		text.setValue(this.plugin.settings.characterImagePath || "")
+			.setDisabled(true);
+	});
+
+
+new Setting(containerEl)
+	.setName("Nota da Página do Personagem")
+	.setDesc("Digite o caminho da nota (ex: Personagem/Arya.md)")
+	.addText(text => {
+		text.setPlaceholder("Personagem/Arya")
+			.setValue(this.plugin.settings.characterNotePath || "")
+			.onChange(async (value) => {
+				this.plugin.settings.characterNotePath = value.trim();
+				await this.plugin.saveSettings();
+			});
+	});
+
 			
 			// Add new quest
 			containerEl.createEl('h4', { text: 'Add New Quest' });

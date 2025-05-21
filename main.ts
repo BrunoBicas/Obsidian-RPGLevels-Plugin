@@ -9,6 +9,14 @@ interface CharacterStats {
 	Charisma: number;
 }
 
+interface EffectData {
+  notePath: string;
+  startDate?: string;
+  durationDays?: number;
+  permanent?: boolean;
+  active: boolean;
+}
+
 interface RPGLevelsSettings {
 	currentXP: number;
 	level: number;
@@ -22,6 +30,9 @@ interface RPGLevelsSettings {
 	 feats: string[];
 	 statIncreases: { [stat: string]: number };
     };
+	effectFolders: string[];
+	repeatableEffectFolders: string[];    // efeitos que podem ser aplicados várias vezes
+    effects: { [id: string]: EffectData };
 	xpGainRates: {
 		createNote: number;
 		editNote: number;
@@ -70,6 +81,9 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
 		Wisdom: 10,
 		Charisma: 10,
 	  },
+	effectFolders: [],
+	repeatableEffectFolders: [],
+    effects: {},
 	obtainedFeats: [],
     featFolders: [], // You manually populate this in settings
 	featPoints: 0,
@@ -132,6 +146,44 @@ export default class RPGLevelsPlugin extends Plugin {
 	linkCount: number = 0;
 	noteCount: number = 0;
 	isInitializing: boolean = true; // Flag to track initialization state
+	
+	isEffectExpired(effect: EffectData): boolean {
+  if (effect.permanent || !effect.startDate || !effect.durationDays) return false;
+
+  const start = new Date(effect.startDate);
+  const now = new Date();
+  const diffDays = Math.floor((now.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+  return diffDays >= effect.durationDays;
+ } 
+
+ getDaysRemaining(effect: EffectData): number | null {
+  if (effect.permanent || !effect.startDate || !effect.durationDays) return null;
+
+  const start = new Date(effect.startDate);
+  const now = new Date();
+  const diff = Math.floor((now.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+
+  const remaining = effect.durationDays - diff;
+  return remaining > 0 ? remaining : 0;
+ }
+
+ getTimeRemaining(effect: EffectData): { days: number; hours: number } | null {
+  if (effect.permanent || !effect.startDate || !effect.durationDays) return null;
+
+  const start = new Date(effect.startDate);
+  const now = new Date();
+
+  const msTotal = start.getTime() + effect.durationDays * 24 * 60 * 60 * 1000 - now.getTime();
+  if (msTotal <= 0) return { days: 0, hours: 0 };
+
+  const days = Math.floor(msTotal / (1000 * 60 * 60 * 24));
+  const hours = Math.floor((msTotal % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+
+  return { days, hours };
+}
+
+
+
 	
 	// New variables for edit tracking
 	private editTimer: NodeJS.Timeout | null = null;
@@ -345,6 +397,40 @@ export default class RPGLevelsPlugin extends Plugin {
 	
 		return feats;
 	}
+
+   getAvailableEffectsFromFolders(): string[] {
+   const effects: string[] = [];
+
+   for (const folderPath of this.settings.effectFolders) {
+    const folder = this.app.vault.getAbstractFileByPath(folderPath);
+    if (folder instanceof TFolder) {
+      for (const file of folder.children) {
+        if (file instanceof TFile && file.extension === "md") {
+          effects.push(file.path);
+        }
+      }
+    }
+   }
+
+   return effects;
+  }
+
+  getAvailableRepeatableEffects(): string[] {
+  const effects: string[] = [];
+
+  for (const folderPath of this.settings.repeatableEffectFolders) {
+    const folder = this.app.vault.getAbstractFileByPath(folderPath);
+    if (folder instanceof TFolder) {
+      for (const file of folder.children) {
+        if (file instanceof TFile && file.extension === "md") {
+          effects.push(file.path);
+        }
+      }
+    }
+  }
+
+  return effects;
+ }
 	
 
 	// New method to initialize with currently open file
@@ -788,6 +874,8 @@ export default class RPGLevelsPlugin extends Plugin {
 		modal.contentEl.appendChild(modalDiv);
 		modal.open();
 	}
+
+	
 	
 	getAchievementInfo(key: string): AchievementInfo {
 		const achievements: AchievementsDict = {
@@ -833,6 +921,184 @@ class FolderSuggestModal extends FuzzySuggestModal<TFolder> {
 	onChooseItem(item: TFolder) {
 		this.onChooseFolder(item.path);
 	}
+}
+
+class EffectsModal extends Modal {
+  plugin: RPGLevelsPlugin;
+
+  constructor(app: App, plugin: RPGLevelsPlugin) {
+    super(app);
+    this.plugin = plugin;
+  }
+
+  onOpen() {
+  const { contentEl } = this;
+  contentEl.createEl("h2", { text: "Efeitos Ativos" });
+
+  // === Limpa efeitos expirados ===
+  const rawEffects: Record<string, EffectData> = this.plugin.settings.effects ?? {};
+  const activeEffects: Record<string, EffectData> = {};
+  let expiredCount = 0;
+
+  for (const [id, effect] of Object.entries(rawEffects)) {
+    if (this.plugin.isEffectExpired(effect)) {
+      expiredCount++;
+      continue;
+    }
+    activeEffects[id] = effect;
+  }
+
+  this.plugin.settings.effects = activeEffects;
+  if (expiredCount > 0) {
+    this.plugin.saveSettings();
+    new Notice(`${expiredCount} efeito(s) expirado(s) foram removidos.`);
+  }
+
+  // === Renderiza efeitos ativos ===
+  const effectKeys = Object.keys(activeEffects);
+  if (effectKeys.length === 0) {
+    contentEl.createEl("p", { text: "Nenhum efeito ativo." });
+  } else {
+    effectKeys.forEach(key => {
+      const effect = activeEffects[key];
+      const isExpired = this.plugin.isEffectExpired(effect);
+      const remaining = this.plugin.getTimeRemaining(effect);
+
+      const effectDiv = contentEl.createDiv({ cls: "effect-item" });
+      effectDiv.style.border = "1px solid var(--background-modifier-border)";
+      effectDiv.style.borderRadius = "5px";
+      effectDiv.style.padding = "10px";
+      effectDiv.style.marginBottom = "10px";
+
+      effectDiv.createEl("h4", { text: effect.notePath });
+
+      effectDiv.createEl("p", {
+        text: effect.permanent
+          ? "⏳ Permanente"
+          : isExpired
+            ? "❌ Expirado"
+            : `🕒 ${remaining?.days} dia(s) e ${remaining?.hours} hora(s) restantes`
+      });
+
+      if (isExpired) {
+        effectDiv.style.opacity = "0.5";
+      }
+
+      const buttonRow = effectDiv.createDiv({ cls: "button-row" });
+
+      const openBtn = buttonRow.createEl("button", { text: "Abrir Nota" });
+      openBtn.onclick = () => {
+        this.app.workspace.openLinkText(effect.notePath, '', false);
+      };
+
+      const removeBtn = buttonRow.createEl("button", { text: "Remover" });
+      removeBtn.onclick = async () => {
+        delete this.plugin.settings.effects[key];
+        await this.plugin.saveSettings();
+        this.close();
+        new EffectsModal(this.app, this.plugin).open();
+      };
+    });
+  }
+
+  // === Seção de Adição de Efeitos ===
+  contentEl.createEl("h3", { text: "Efeitos únicos disponíveis" });
+
+  const addedPaths = Object.values(activeEffects).map(e => e.notePath);
+  const uniqueAvailable = this.plugin.getAvailableEffectsFromFolders()
+    .filter(p => !addedPaths.includes(p));
+
+  if (uniqueAvailable.length === 0) {
+    contentEl.createEl("p", { text: "Nenhum efeito único disponível." });
+  } else {
+    uniqueAvailable.forEach(path => {
+      this.renderEffectEntry(contentEl, path);
+    });
+  }
+
+  contentEl.createEl("h3", { text: "Efeitos repetíveis disponíveis" });
+
+  const repeatableAvailable = this.plugin.getAvailableRepeatableEffects();
+
+  if (repeatableAvailable.length === 0) {
+    contentEl.createEl("p", { text: "Nenhum efeito repetível disponível." });
+  } else {
+    repeatableAvailable.forEach(path => {
+      this.renderEffectEntry(contentEl, path);
+    });
+  }
+}
+
+  renderEffectEntry(contentEl: HTMLElement, path: string) {
+    const container = contentEl.createDiv({ cls: "effect-entry" });
+    container.style.marginBottom = "10px";
+    container.style.padding = "10px";
+    container.style.border = "1px solid var(--background-modifier-border)";
+    container.style.borderRadius = "5px";
+
+    const header = container.createDiv({ cls: "effect-header" });
+    header.style.display = "flex";
+    header.style.justifyContent = "space-between";
+    header.style.alignItems = "center";
+
+    header.createEl("b", { text: path });
+
+    const toggleBtn = header.createEl("button", { text: "➕ Adicionar" });
+    const configDiv = container.createDiv();
+    configDiv.style.display = "none";
+
+    toggleBtn.onclick = () => {
+      const opened = configDiv.style.display === "block";
+      configDiv.style.display = opened ? "none" : "block";
+      toggleBtn.setText(opened ? "➕ Adicionar" : "✖ Cancelar");
+    };
+
+    let duration = 3;
+    let permanent = false;
+
+    new Setting(configDiv)
+      .setName("Duração (dias)")
+      .setDesc("Deixe 0 para ignorar")
+      .addText(text => {
+        text.setPlaceholder("Ex: 3")
+          .setValue(duration.toString())
+          .onChange(value => {
+            const parsed = parseInt(value);
+            duration = !isNaN(parsed) && parsed >= 0 ? parsed : 0;
+          });
+      });
+
+    new Setting(configDiv)
+      .setName("Permanente")
+      .addToggle(toggle => {
+        toggle.setValue(permanent).onChange(value => {
+          permanent = value;
+        });
+      });
+
+    new Setting(configDiv)
+      .addButton(button => {
+        button.setButtonText("Confirmar")
+          .setCta()
+          .onClick(async () => {
+            const id = `eff_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+            this.plugin.settings.effects[id] = {
+              notePath: path,
+              startDate: new Date().toISOString(),
+              durationDays: permanent ? undefined : duration,
+              permanent,
+              active: true
+            };
+            await this.plugin.saveSettings();
+            this.close();
+            new EffectsModal(this.app, this.plugin).open();
+          });
+      });
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
 }
 
 class StatsModal extends Modal {
@@ -951,6 +1217,21 @@ class StatsModal extends Modal {
         }(this.app, plugin, this.plugin.settings.characterStats, parentModal).open();
       };
 
+	  	contentEl.createEl("button", {
+   text: "Manage Effects",
+   cls: "mod-cta"
+ }).onclick = () => {
+   this.close();
+   new EffectsModal(this.app, this.plugin).open();
+  };
+
+  const activeEffects = Object.values(this.plugin.settings.effects).filter(e => e.active && !this.plugin.isEffectExpired(e));
+ if (activeEffects.length > 0) {
+  contentEl.createEl("h3", { text: "🧪 Active Effects" });
+  activeEffects.forEach(eff => {
+    contentEl.createEl("p", { text: `• ${eff.notePath}` });
+  });
+ }
   } 
 
   onClose() {
@@ -1071,63 +1352,87 @@ class FeatsModal extends Modal {
 	}
 
 	onOpen() {
-		const { contentEl } = this;
-		contentEl.createEl("h2", { text: "Feats" });
-		contentEl.createEl("h3", { text: `Feat Points disponíveis: ${this.plugin.settings.featPoints ?? 0}` });
+  const { contentEl } = this;
 
+  // === Feats obtidos ===
+  const obtainedFeats: string[] = this.plugin.settings.obtainedFeats ?? [];
+  const allFeats = this.plugin.getAvailableFeatsFromFolders();
+  const repeatableFeats = this.plugin.getAvailableRepeatableEffects();
+  const alreadyObtained = new Set(obtainedFeats);
 
-		const obtainedFeats = this.plugin.settings.obtainedFeats;
-        const allFeats = this.plugin.getAvailableFeatsFromFolders();
-        const unobtainedFeats = allFeats.filter((f: string) => !obtainedFeats.includes(f));
-		
+  contentEl.createEl("h2", { text: "Manage Feats" });
 
-		contentEl.createEl("h3", { text: "Obtained Feats" });
-		if (obtainedFeats.length === 0) {
-			contentEl.createEl("p", { text: "No feats yet." });
-		} else {
-			obtainedFeats.forEach(async feat => {
-				const container = contentEl.createDiv();
-			
-				// Render the link as markdown
-				await MarkdownRenderer.renderMarkdown(`[[${feat}]]`, container, '', this.plugin);
-			
-				// Find the link element and hook up click behavior
-				const linkEl = container.querySelector("a.internal-link");
-				if (linkEl) {
-					linkEl.addEventListener("click", (e) => {
-						e.preventDefault();
-						this.app.workspace.openLinkText(feat, '', false);
-					});
-				}
-			});
-			
-		}
-		
+  contentEl.createEl("h3", { text: "Obtained Feats" });
+  if (obtainedFeats.length === 0) {
+    contentEl.createEl("p", { text: "No feats yet." });
+  } else {
+    obtainedFeats.forEach(async (feat: string) => {
+      const container = contentEl.createDiv();
+      await MarkdownRenderer.renderMarkdown(`[[${feat}]]`, container, '', this.plugin);
+      const linkEl = container.querySelector("a.internal-link");
+      if (linkEl) {
+        linkEl.addEventListener("click", (e) => {
+          e.preventDefault();
+          this.app.workspace.openLinkText(feat, '', false);
+        });
+      }
+    });
+  }
 
-		contentEl.createEl("h3", { text: "Unobtained Feats" });
-		if (unobtainedFeats.length === 0) {
-			contentEl.createEl("p", { text: "No feats available." });
-		} else {
-			unobtainedFeats.forEach((feat: string) => {
-				const row = contentEl.createDiv({ cls: "feat-row" });
-				row.createEl("span", { text: feat });
+  // === Feats únicos ===
+  const uniqueAvailable = allFeats.filter(f => !alreadyObtained.has(f));
 
-				const pickBtn = row.createEl("button", { text: "Pick Feat" });
-				pickBtn.onclick = async () => {
-				  if ((this.plugin.settings.featPoints ?? 0) <= 0) {
-					new Notice("Você não tem pontos de feat suficientes.");
-					return;
-				  }
-				  this.plugin.settings.obtainedFeats.push(feat);
-				  this.plugin.settings.featPoints--;
-				  await this.plugin.saveSettings();
-				  this.close();
-				  new FeatsModal(this.app, this.plugin).open();
-				};
-				
-			});
-		}
-	}
+  // === Seção de feats disponíveis ===
+  contentEl.createEl("h3", { text: "Available Feats" });
+
+  if (uniqueAvailable.length === 0 && repeatableFeats.length === 0) {
+    contentEl.createEl("p", { text: "No feats available." });
+  } else {
+    // 🟩 Feats únicos
+    if (uniqueAvailable.length > 0) {
+      contentEl.createEl("h4", { text: "Unique Feats" });
+      uniqueAvailable.forEach((feat: string) => {
+        const row = contentEl.createDiv({ cls: "feat-row" });
+        row.createEl("span", { text: feat });
+
+        const pickBtn = row.createEl("button", { text: "Pick Feat" });
+        pickBtn.onclick = async () => {
+          if ((this.plugin.settings.featPoints ?? 0) <= 0) {
+            new Notice("Você não tem pontos de feat suficientes.");
+            return;
+          }
+          this.plugin.settings.obtainedFeats.push(feat);
+          this.plugin.settings.featPoints!--;
+          await this.plugin.saveSettings();
+          this.close();
+          new FeatsModal(this.app, this.plugin).open();
+        };
+      });
+    }
+
+    // ♻️ Efeitos repetíveis
+    if (repeatableFeats.length > 0) {
+      contentEl.createEl("h4", { text: "Repeatable Effects" });
+      repeatableFeats.forEach((feat: string) => {
+        const row = contentEl.createDiv({ cls: "feat-row" });
+        row.createEl("span", { text: feat });
+
+        const pickBtn = row.createEl("button", { text: "Pick Feat" });
+        pickBtn.onclick = async () => {
+          if ((this.plugin.settings.featPoints ?? 0) <= 0) {
+            new Notice("Você não tem pontos de feat suficientes.");
+            return;
+          }
+          this.plugin.settings.obtainedFeats.push(feat); // permite duplicados
+          this.plugin.settings.featPoints!--;
+          await this.plugin.saveSettings();
+          this.close();
+          new FeatsModal(this.app, this.plugin).open();
+        };
+      });
+    }
+  }
+}
 
 	onClose() {
 		this.contentEl.empty();
@@ -1586,7 +1891,73 @@ new Setting(questForm)
 						this.display();
 					}));
 
-					new Setting(containerEl)
+	new Setting(containerEl)
+  .setName("Effect Folder Paths")
+  .setDesc("Select folders that contain effect notes.")
+  .addButton(button => {
+    button.setButtonText("Add Folder");
+    button.onClick(async () => {
+      const folderModal = new FolderSuggestModal(this.app);
+      folderModal.open();
+      folderModal.onChooseFolder = (folderPath: string) => {
+        if (!this.plugin.settings.effectFolders.includes(folderPath)) {
+          this.plugin.settings.effectFolders.push(folderPath);
+          this.plugin.saveSettings();
+          this.display();
+        }
+      };
+    });
+  });
+
+ this.plugin.settings.effectFolders.forEach((folderPath, index) => {
+   new Setting(containerEl)
+    .setName(`🧪 ${folderPath}`)
+    .addButton(button =>
+      button.setButtonText("❌")
+        .setTooltip("Remove")
+        .onClick(() => {
+          this.plugin.settings.effectFolders.splice(index, 1);
+          this.plugin.saveSettings();
+          this.display();
+        })
+    );
+ });
+
+ new Setting(containerEl)
+  .setName("Pastas de Efeitos Repetíveis")
+  .setDesc("Permite adicionar múltiplas instâncias do mesmo efeito")
+  .addButton(button => {
+    button.setButtonText("Adicionar Pasta");
+    button.onClick(() => {
+      const folderModal = new FolderSuggestModal(this.app);
+      folderModal.open();
+      folderModal.onChooseFolder = (folderPath: string) => {
+        if (!this.plugin.settings.repeatableEffectFolders.includes(folderPath)) {
+          this.plugin.settings.repeatableEffectFolders.push(folderPath);
+          this.plugin.saveSettings();
+          this.display();
+        }
+      };
+    });
+  });
+
+this.plugin.settings.repeatableEffectFolders.forEach((folderPath, index) => {
+  new Setting(containerEl)
+    .setName(`♻️ ${folderPath}`)
+    .addButton(button =>
+      button.setButtonText("❌")
+        .setTooltip("Remover")
+        .onClick(() => {
+          this.plugin.settings.repeatableEffectFolders.splice(index, 1);
+          this.plugin.saveSettings();
+          this.display();
+        })
+    );
+});
+
+
+
+	new Setting(containerEl)
 	.setName("Feats Folder Paths")
 	.setDesc("Select folders that contain feat notes.")
 	.addButton(button => {

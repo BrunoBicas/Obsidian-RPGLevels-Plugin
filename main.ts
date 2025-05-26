@@ -15,6 +15,9 @@ interface EffectData {
   durationDays?: number;
   permanent?: boolean;
   active: boolean;
+  hpBonus?: number;
+  tempHP?: number;
+  [key: string]: any;
 }
 
 interface RPGLevelsSettings {
@@ -44,6 +47,14 @@ interface RPGLevelsSettings {
         taskHard: number;
 		questComplete: number;
 	};
+	health: {
+    currentHP: number;
+    maxHP: number;
+    tempHP: number;
+    baseDie: number; // ex: 8 para d8
+    hpPerLevel: number[]; // histórico de HP ganho por nível
+    };
+
 	quests: {
 		[id: string]: {
 			title: string;
@@ -81,6 +92,14 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
 		Wisdom: 10,
 		Charisma: 10,
 	  },
+	health: {
+    currentHP: 8,
+    maxHP: 8,
+    tempHP: 0,
+    baseDie: 8, // padrão d8
+    hpPerLevel: [8],
+  },
+
 	effectFolders: [],
 	repeatableEffectFolders: [],
     effects: {},
@@ -363,6 +382,8 @@ export default class RPGLevelsPlugin extends Plugin {
 			// ADDED: Initialize with currently open file, if any
 			this.initializeCurrentFile();
 		}, 1000); // 1 second delay
+		await this.applyAllPassiveEffects();
+
 		
 		// Add commands
 		this.addCommand({
@@ -431,6 +452,75 @@ export default class RPGLevelsPlugin extends Plugin {
 
   return effects;
  }
+
+ async applyAllPassiveEffects() {
+  const statsBase = {
+    Strength: 10,
+    Dexterity: 10,
+    Constitution: 10,
+    Intelligence: 10,
+    Wisdom: 10,
+    Charisma: 10
+  };
+
+  const statBonus: Partial<CharacterStats> = {
+    Strength: 0,
+    Dexterity: 0,
+    Constitution: 0,
+    Intelligence: 0,
+    Wisdom: 0,
+    Charisma: 0
+  };
+  
+
+  let featHpBonus = 0;
+  let featTempHP = 0;
+
+  const allSources = [
+    ...this.settings.obtainedFeats,
+    ...Object.values(this.settings.effects).filter(e => e.active && !this.isEffectExpired(e)).map(e => e.notePath)
+  ];
+
+  while (this.settings.health.hpPerLevel.length < this.settings.level) {
+  this.settings.health.hpPerLevel.push(this.settings.health.baseDie);
+  }
+
+  for (const path of allSources) {
+    const data = await this.loadEffectFromNote(path);
+
+    if (data.hpBonus) featHpBonus += data.hpBonus;
+    if (data.tempHP) featTempHP = Math.max(featTempHP, data.tempHP);
+
+    for (const [key, value] of Object.entries(data)) {
+      if (key in statBonus && typeof value === "number") {
+        statBonus[key as keyof CharacterStats]! += value;
+      }
+    }
+  }
+
+  // Atributos finais = base + aumento por level + bônus de feats/efeitos
+  const statLevelBonus = Math.floor(this.settings.level / 4);
+  const finalStats: CharacterStats = {} as CharacterStats;
+
+  for (const key of Object.keys(statsBase)) {
+    finalStats[key as keyof CharacterStats] =
+  statsBase[key as keyof CharacterStats]! +
+  statLevelBonus +
+  (this.settings.spentFeatPoints.statIncreases[key as keyof CharacterStats] ?? 0) +
+  (statBonus[key as keyof CharacterStats] ?? 0);
+  }
+
+  this.settings.characterStats = finalStats;
+
+  // Atualiza HP
+  const baseHP = this.settings.health.hpPerLevel.reduce((a, b) => a + b, 0);
+  this.settings.health.maxHP = baseHP + featHpBonus;
+  this.settings.health.tempHP = featTempHP;
+
+  await this.saveSettings();
+}
+
+
 	
 
 	// New method to initialize with currently open file
@@ -476,6 +566,8 @@ export default class RPGLevelsPlugin extends Plugin {
 				console.error("Error processing file edit:", error);
 			}
 		}, this.settings.editDebounceTime);
+
+		await this.applyAllPassiveEffects();
 	}
 	
 	onunload() {
@@ -538,7 +630,30 @@ export default class RPGLevelsPlugin extends Plugin {
 			new Notice(message);
 		}
 	}
+
+	async loadEffectFromNote(path: string): Promise<Partial<EffectData>> {
+  const file = this.app.vault.getAbstractFileByPath(path);
+  if (!(file instanceof TFile)) return {};
+
+  const metadata = this.app.metadataCache.getFileCache(file)?.frontmatter;
+  if (!metadata) return {};
+
+  const result: Partial<EffectData> = {};
+
+  for (const [key, value] of Object.entries(metadata)) {
+    if (typeof value === "number") {
+      result[key] = value;
+    }
+  }
+
+  return result;
+ }
+
 	
+	rollHP(): number {
+  return Math.ceil(Math.random() * this.settings.health.baseDie);
+ }
+
 	levelUp() {
 		this.settings.level++;
 		if (this.settings.level >= 20) {
@@ -560,6 +675,15 @@ export default class RPGLevelsPlugin extends Plugin {
 		  Wisdom: 10 + statBonus,
 		  Charisma: 10 + statBonus,
 		};
+
+		const conMod = Math.floor((this.settings.characterStats.Constitution - 10) / 2);
+        const hpRoll = this.rollHP(); // função que permite alterar ou rolar o dado
+        const gainedHP = Math.max(1, hpRoll + conMod);
+
+        this.settings.health.hpPerLevel.push(gainedHP);
+        this.settings.health.maxHP += gainedHP;
+        this.settings.health.currentHP += gainedHP; // opcional: cura ao upar   
+
 
 		const featLevels = [2, 4, 8, 12, 16, 19];
 		if (featLevels.includes(this.settings.level)) {
@@ -1089,6 +1213,8 @@ class EffectsModal extends Modal {
               permanent,
               active: true
             };
+			await this.app.metadataCache.trigger("changed", this.app.vault.getAbstractFileByPath(path));
+			await this.plugin.applyAllPassiveEffects();
             await this.plugin.saveSettings();
             this.close();
             new EffectsModal(this.app, this.plugin).open();
@@ -1109,8 +1235,9 @@ class StatsModal extends Modal {
     this.plugin = plugin;
   }
 
-  onOpen() {
+  async onOpen() {
     const { contentEl } = this;
+	await this.plugin.applyAllPassiveEffects();
     const stats = this.plugin.settings.characterStats;
 
     // Se houver imagem configurada, renderiza
@@ -1168,54 +1295,88 @@ class StatsModal extends Modal {
       contentEl.createEl("p", { text: `${stat}: ${value}` });
     }
 
-    contentEl.createEl("button", { text: "Usar Feat Point para aumentar atributo", cls: "mod-cta" })
-      .onclick = () => {
-        if ((this.plugin.settings.featPoints ?? 0) <= 0) {
-          new Notice("Você não tem Feat Points disponíveis.");
-          return;
-        }
+   const featBtn = contentEl.createEl("button", {
+  text: "Usar Feat Point para aumentar atributo",
+  cls: "mod-cta"
+});
 
-        const plugin = this.plugin;
-        const parentModal = this;
+featBtn.onclick = () => {
+  if ((this.plugin.settings.featPoints ?? 0) <= 0) {
+    new Notice("Você não tem Feat Points disponíveis.");
+    return;
+  }
 
-        new class extends FuzzySuggestModal<string> {
-          stats: CharacterStats;
-          plugin: RPGLevelsPlugin;
-          parentModal: Modal;
+  const plugin = this.plugin;
+  const parentModal = this;
 
-          constructor(app: App, plugin: RPGLevelsPlugin, stats: CharacterStats, parentModal: Modal) {
-            super(app);
-            this.plugin = plugin;
-            this.stats = stats;
-            this.parentModal = parentModal;
-          }
+  new class extends FuzzySuggestModal<string> {
+    plugin: RPGLevelsPlugin;
+    parentModal: Modal;
 
-          getItems(): string[] {
-            return Object.keys(this.stats);
-          }
-          getItemText(item: string): string {
-            return item;
-          }
-          onChooseItem(item: string): void {
-            const statKey = item as keyof CharacterStats;
-            const atual = this.stats[statKey];
+    constructor(app: App, plugin: RPGLevelsPlugin, parentModal: Modal) {
+      super(app);
+      this.plugin = plugin;
+      this.parentModal = parentModal;
+    }
 
-            if (atual >= 30) {
-              new Notice(`${statKey} já está no máximo (30).`);
-              return;
-            }
+    getItems(): string[] {
+      return Object.keys(this.plugin.settings.characterStats);
+    }
 
-            this.stats[statKey]++;
-            this.plugin.settings.featPoints!--;
+    getItemText(item: string): string {
+      return item;
+    }
 
-            this.plugin.saveSettings().then(() => {
-              new Notice(`${statKey} aumentado para ${this.stats[statKey]}!`);
-              this.parentModal.close();
-              new StatsModal(this.app, this.plugin).open();
-            });
-          }
-        }(this.app, plugin, this.plugin.settings.characterStats, parentModal).open();
-      };
+    onChooseItem(item: string): void {
+      const statKey = item as keyof CharacterStats;
+
+      // Aumenta o contador de bônus persistente
+      const increases = this.plugin.settings.spentFeatPoints.statIncreases;
+      increases[statKey] = (increases[statKey] ?? 0) + 1;
+
+      // Consome feat point
+      this.plugin.settings.featPoints!--;
+
+      this.plugin.applyAllPassiveEffects().then(() => {
+        this.plugin.saveSettings().then(() => {
+          new Notice(`${statKey} aumentado com Feat!`);
+          this.parentModal.close();
+          new StatsModal(this.app, this.plugin).open();
+        });
+      });
+    }
+  }(this.app, plugin, parentModal).open();
+};
+
+
+	contentEl.createEl("button", {
+  text: "❤️ Gerenciar HP",
+  cls: "mod-cta"
+}).onclick = () => {
+  this.close();
+  new HPManagementModal(this.app, this.plugin).open();
+};
+
+
+ const health = this.plugin.settings.health;
+ contentEl.createEl("h3", { text: "❤️ Health" });
+ contentEl.createEl("p", {
+  text: `HP: ${health.currentHP}/${health.maxHP} + (${health.tempHP} Temp)`
+ });
+
+ let featHpBonus = 0;
+let featTempHP = 0;
+
+for (const path of this.plugin.settings.obtainedFeats) {
+  const data = await this.plugin.loadEffectFromNote(path);
+  if (data.hpBonus) featHpBonus += data.hpBonus;
+  if (data.tempHP) featTempHP = Math.max(featTempHP, data.tempHP);
+}
+
+this.plugin.settings.health.maxHP += featHpBonus;
+this.plugin.settings.health.tempHP = Math.max(this.plugin.settings.health.tempHP, featTempHP);
+await this.plugin.saveSettings();
+
 
 	  	contentEl.createEl("button", {
    text: "Manage Effects",
@@ -1225,19 +1386,167 @@ class StatsModal extends Modal {
    new EffectsModal(this.app, this.plugin).open();
   };
 
-  const activeEffects = Object.values(this.plugin.settings.effects).filter(e => e.active && !this.plugin.isEffectExpired(e));
- if (activeEffects.length > 0) {
+  const rawEffects = Object.values(this.plugin.settings.effects).filter(e => e.active && !this.plugin.isEffectExpired(e));
+
+ const activeEffects: EffectData[] = [];
+
+ for (const eff of rawEffects) {
+  const loadedData = await this.plugin.loadEffectFromNote(eff.notePath);
+  activeEffects.push({ ...eff, ...loadedData });
+ }
+
+ let totalHpBonus = 0;
+let maxTempHp = 0;
+
+for (const effect of activeEffects) {
+  if (effect.hpBonus) totalHpBonus += effect.hpBonus;
+  if (effect.tempHP) maxTempHp = Math.max(maxTempHp, effect.tempHP);
+}
+
+const baseMax = this.plugin.settings.health.hpPerLevel.reduce((a, b) => a + b, 0);
+this.plugin.settings.health.maxHP = baseMax + totalHpBonus;
+this.plugin.settings.health.tempHP = maxTempHp;
+
+await this.plugin.saveSettings();
+
+
+
+ // === Aplicar bônus de HP e HP temporário ===
+
+
+ for (const effect of activeEffects) {
+  if (effect.hpBonus) {
+    totalHpBonus += effect.hpBonus;
+  }
+  if (effect.tempHP) {
+    maxTempHp = Math.max(maxTempHp, effect.tempHP);
+  }
+}
+
+// Atualiza os valores de HP no settings
+this.plugin.settings.health.maxHP =
+  this.plugin.settings.health.hpPerLevel.reduce((a, b) => a + b, 0) + totalHpBonus;
+this.plugin.settings.health.tempHP = maxTempHp;
+await this.plugin.saveSettings();
+
+// Exibição dos efeitos
+if (activeEffects.length > 0) {
   contentEl.createEl("h3", { text: "🧪 Active Effects" });
   activeEffects.forEach(eff => {
     contentEl.createEl("p", { text: `• ${eff.notePath}` });
   });
- }
+}
   } 
 
   onClose() {
     this.contentEl.empty();
   }
 }
+
+class HPManagementModal extends Modal {
+  plugin: RPGLevelsPlugin;
+
+  constructor(app: App, plugin: RPGLevelsPlugin) {
+    super(app);
+    this.plugin = plugin;
+  }
+
+  async onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", { text: "❤️ Gerenciar HP" });
+
+    const { health } = this.plugin.settings;
+    const totalHPFromLevels = health.hpPerLevel.reduce((a, b) => a + b, 0);
+
+    // Separar hpBonus de feats e efeitos
+    let featHPBonus = 0;
+    let effectHPBonus = 0;
+
+    for (const path of this.plugin.settings.obtainedFeats) {
+      const data = await this.plugin.loadEffectFromNote(path);
+      if (typeof data.hpBonus === "number") featHPBonus += data.hpBonus;
+    }
+
+    const activeEffects = Object.values(this.plugin.settings.effects)
+      .filter(e => e.active && !this.plugin.isEffectExpired(e));
+
+    for (const effect of activeEffects) {
+      const data = await this.plugin.loadEffectFromNote(effect.notePath);
+      if (typeof data.hpBonus === "number") effectHPBonus += data.hpBonus;
+    }
+
+    const totalBonus = featHPBonus + effectHPBonus;
+
+    // Exibir status atual
+    contentEl.createEl("h3", {
+      text: `❤️ HP Atual: ${health.currentHP}/${health.maxHP}`
+    });
+
+    contentEl.createEl("p", {
+      text: `🧪 HP Temporário: ${health.tempHP}`
+    });
+
+    // Mostrar o dado de HP
+    contentEl.createEl("p", {
+      text: `🎲 Dado de HP usado: d${health.baseDie}`
+    });
+
+    // Mostrar dados por nível
+    contentEl.createEl("h3", { text: "📈 HP por Nível (dados rolados)" });
+    const list = contentEl.createEl("ul");
+    health.hpPerLevel.forEach((val, idx) => {
+      list.createEl("li", { text: `Nível ${idx + 1}: ${val} HP` });
+    });
+
+    // ➕ Botão de treino: adicionar +1 HP ao nível atual
+    contentEl.createEl("button", { text: "🏋️ Treinar +1 HP neste nível" }).onclick = async () => {
+      const level = this.plugin.settings.level;
+      if (health.hpPerLevel.length < level) {
+        new Notice("Você ainda não ganhou HP neste nível.");
+        return;
+      }
+
+      health.hpPerLevel[level - 1]++;
+      health.maxHP++;
+      health.currentHP++;
+      await this.plugin.saveSettings();
+      new Notice("HP aumentado por treino.");
+      this.close();
+      new HPManagementModal(this.app, this.plugin).open();
+    };
+
+    // Mostrar bônus separados
+    contentEl.createEl("h3", { text: "✨ Bônus de HP" });
+
+    contentEl.createEl("p", {
+      text: `🧠 De Feats: ${featHPBonus}`
+    });
+
+    contentEl.createEl("p", {
+      text: `🌀 De Efeitos/Status Ativos: ${effectHPBonus}`
+    });
+
+    contentEl.createEl("h3", {
+      text: `🔢 Total de HP Máximo: ${health.maxHP} = ${totalHPFromLevels} (níveis) + ${featHPBonus} (feats) + ${effectHPBonus} (efeitos)`
+    });
+
+    // Botão: Curar totalmente
+    contentEl.createEl("button", { text: "💊 Curar totalmente" }).onclick = async () => {
+      this.plugin.settings.health.currentHP = this.plugin.settings.health.maxHP;
+      await this.plugin.saveSettings();
+      new Notice("Curado!");
+      this.close();
+      new HPManagementModal(this.app, this.plugin).open();
+    };
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+
 
 
 class QuestModal extends Modal {
@@ -1357,7 +1666,7 @@ class FeatsModal extends Modal {
   // === Feats obtidos ===
   const obtainedFeats: string[] = this.plugin.settings.obtainedFeats ?? [];
   const allFeats = this.plugin.getAvailableFeatsFromFolders();
-  const repeatableFeats = this.plugin.getAvailableRepeatableEffects();
+  const repeatableFeats: string[] = []; // ou remova o bloco de feats repetíveis completamente
   const alreadyObtained = new Set(obtainedFeats);
 
   contentEl.createEl("h2", { text: "Manage Feats" });
@@ -1378,6 +1687,49 @@ class FeatsModal extends Modal {
       }
     });
   }
+  
+  const removeFeatBtn = contentEl.createEl("button", {
+  text: "🗑️ Remover Feat Obtido",
+  cls: "mod-cta"
+});
+
+removeFeatBtn.onclick = () => {
+  const feats = this.plugin.settings.obtainedFeats;
+
+  if (feats.length === 0) {
+    new Notice("Você não tem feats para remover.");
+    return;
+  }
+
+  new class extends FuzzySuggestModal<string> {
+    plugin: RPGLevelsPlugin;
+    parentModal: Modal;
+
+    constructor(app: App, plugin: RPGLevelsPlugin, parentModal: Modal) {
+      super(app);
+      this.plugin = plugin;
+      this.parentModal = parentModal;
+    }
+
+    getItems(): string[] {
+      return this.plugin.settings.obtainedFeats;
+    }
+
+    getItemText(item: string): string {
+      return item;
+    }
+
+    async onChooseItem(item: string) {
+      this.plugin.settings.obtainedFeats = this.plugin.settings.obtainedFeats.filter(f => f !== item);
+      await this.plugin.applyAllPassiveEffects();
+      await this.plugin.saveSettings();
+      new Notice(`Feat removido: ${item}`);
+      this.parentModal.close();
+      new FeatsModal(this.app, this.plugin).open();
+    }
+  }(this.app, this.plugin, this).open();
+ };
+
 
   // === Feats únicos ===
   const uniqueAvailable = allFeats.filter(f => !alreadyObtained.has(f));
@@ -1425,6 +1777,7 @@ class FeatsModal extends Modal {
           }
           this.plugin.settings.obtainedFeats.push(feat); // permite duplicados
           this.plugin.settings.featPoints!--;
+		  await this.plugin.applyAllPassiveEffects();
           await this.plugin.saveSettings();
           this.close();
           new FeatsModal(this.app, this.plugin).open();
@@ -2006,6 +2359,20 @@ new Setting(containerEl)
       }
     }));
 
+	new Setting(containerEl)
+  .setName("Base HP Die (dX)")
+  .addText(text => text
+    .setPlaceholder("Ex: 6, 8, 10, 12")
+    .setValue(this.plugin.settings.health.baseDie.toString())
+    .onChange(async (val) => {
+      const parsed = parseInt(val);
+      if (!isNaN(parsed) && parsed > 0) {
+        this.plugin.settings.health.baseDie = parsed;
+        await this.plugin.saveSettings();
+      }
+    }));
 
-	}
+
+
+}
 }

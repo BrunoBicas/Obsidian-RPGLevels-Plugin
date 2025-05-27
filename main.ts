@@ -31,6 +31,13 @@ interface HealthData {
   tempHP: number;
 }
 
+interface TrainingEntry {
+  weekStart: string;
+  lastAttempt?: string;
+  attempts: number;
+  success: boolean;
+}
+
 
 interface RPGLevelsSettings {
 	currentXP: number;
@@ -62,8 +69,8 @@ interface RPGLevelsSettings {
 	
 	health: HealthData;
 
+	trainingLog: Record<number, TrainingEntry>;
  
-
 
 	quests: {
 		[id: string]: {
@@ -110,6 +117,8 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
   currentHP: 8,
   tempHP: 0
  },
+
+    trainingLog: {},
 
 	effectFolders: [],
 	repeatableEffectFolders: [],
@@ -1484,11 +1493,14 @@ class HPManagementModal extends Modal {
     super(app);
     this.plugin = plugin;
   }
+  
 
   async onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+	await this.plugin.applyAllPassiveEffects();
     contentEl.createEl("h2", { text: "❤️ Gerenciar HP" });
+	
 
     const { health } = this.plugin.settings;
     const totalHPFromLevels = health.hpPerLevel.reduce((a, b) => a + b, 0);
@@ -1549,42 +1561,102 @@ class HPManagementModal extends Modal {
       list.createEl("li", { text: `Nível ${idx + 1}: ${val} HP` });
     });
 
-    // Botão de treino
-    const level = this.plugin.settings.level;
-    const currentLevelIndex = level - 1;
+	
+	// Botão de treino
+    let lastSelectedLevel = 0; // fora da classe
 
-   contentEl.createEl("h3", { text: "🏋️ Treinar HP de um nível específico" });
 
-  const trainWrapper = contentEl.createDiv();
-  const levelSelect = trainWrapper.createEl("select");
-  const trainButton = trainWrapper.createEl("button", { text: "Treinar +1 HP" });
+ const trainWrapper = contentEl.createDiv();
+ const levelSelect = trainWrapper.createEl("select");
+ const trainButton = trainWrapper.createEl("button", { text: "Treinar +1 HP" });
 
-  for (let i = 0; i < health.hpPerLevel.length; i++) {
-   const option = levelSelect.createEl("option", {
-     text: `Nível ${i + 1}`,
-     value: i.toString(),
-   });
-  }
+ // Popula opções e mantém seleção
+ for (let i = 0; i < health.hpPerLevel.length; i++) {
+  const option = levelSelect.createEl("option", {
+    text: `Nível ${i + 1}`,
+    value: i.toString(),
+  });
+  if (i === lastSelectedLevel) option.selected = true;
+ }
 
+ // Ao clicar no botão
  trainButton.onclick = async () => {
   const index = parseInt(levelSelect.value);
+  lastSelectedLevel = index;
+
   const current = health.hpPerLevel[index];
   const maxPossible = health.baseDie;
 
   if (current >= maxPossible) {
-    new Notice(`Nível ${index + 1} já atingiu o HP máximo possível do dado (${maxPossible}).`);
+    new Notice(`Nível ${index + 1} já atingiu o HP máximo possível (${maxPossible}).`);
     return;
   }
 
-  health.hpPerLevel[index]++;
-  health.maxHP++;
-  health.currentHP++;
-  await this.plugin.saveSettings();
+  // Determina início da semana (segunda-feira)
+  const today = new Date();
+  const dayOfWeek = today.getDay(); // 0 = domingo
+  const diffToMonday = (dayOfWeek + 6) % 7;
+  const monday = new Date(today);
+  monday.setDate(today.getDate() - diffToMonday);
+  monday.setHours(0, 0, 0, 0);
+  const mondayISO = monday.toISOString();
 
-  new Notice(`Nível ${index + 1} treinado: +1 HP`);
+  const log = this.plugin.settings.trainingLog ??= {};
+
+  // Inicializa ou reseta o log do nível
+  if (!log[index] || log[index].weekStart !== mondayISO) {
+    log[index] = {
+      weekStart: mondayISO,
+      attempts: 0,
+      success: false
+    };
+  }
+
+  
+
+  const levelLog = log[index];
+
+  if (levelLog.success) {
+    new Notice(`Você já teve sucesso treinando o nível ${index + 1} esta semana.`);
+    return;
+  }
+
+  const todayISO = new Date().toISOString().split("T")[0];
+
+ if (levelLog.lastAttempt === todayISO) {
+  new Notice(`Você já treinou o nível ${index + 1} hoje.`);
+  return;
+ }
+
+
+  // Tabela de chance por tentativa (acumulada)
+  const chanceTable = [0.05, 0.07, 0.10, 0.15, 0.20];
+  levelLog.attempts++;
+  const totalChance = chanceTable
+    .slice(0, levelLog.attempts)
+    .reduce((a, b) => a + b, 0);
+
+  const roll = Math.random();
+  if (roll <= totalChance) {
+    health.hpPerLevel[index]++;
+    health.maxHP++;
+    health.currentHP++;
+    levelLog.success = true;
+	levelLog.lastAttempt = todayISO;
+
+
+    await this.plugin.saveSettings();
+    new Notice(`🏋️ Sucesso! Ganhou +1 HP no nível ${index + 1} com ${levelLog.attempts} treino(s) essa semana.`);
+  } else {
+	levelLog.lastAttempt = todayISO;
+    await this.plugin.saveSettings();
+    new Notice(`📆 Treinamento registrado. Chance acumulada esta semana: ${(totalChance * 100).toFixed(1)}%.`);
+  }
+
   this.close();
   new HPManagementModal(this.app, this.plugin).open();
  };
+
 
  const conMod = Math.floor((this.plugin.settings.characterStats.Constitution - 10) / 2);
  const constitutionHPBonus = conMod * this.plugin.settings.level;
@@ -1595,6 +1667,11 @@ class HPManagementModal extends Modal {
     contentEl.createEl("p", {
       text: `🧠 De Feats: ${featHPBonus}`
     });
+	
+	contentEl.createEl("p", {
+   text: `💪 De Constituição: ${constitutionHPBonus}`
+  });
+
 
     contentEl.createEl("p", {
       text: `🌀 De Efeitos/Status Ativos: ${effectHPBonus}`

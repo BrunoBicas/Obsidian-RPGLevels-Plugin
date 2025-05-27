@@ -1,4 +1,6 @@
 import { App, Plugin, PluginSettingTab, Setting, TFile, MarkdownView, Notice, Modal, TFolder, TAbstractFile, FuzzySuggestModal, MarkdownRenderer } from 'obsidian';
+import { Dice } from "./dice";
+
 
 interface CharacterStats {
 	Strength: number;
@@ -19,6 +21,16 @@ interface EffectData {
   tempHP?: number;
   [key: string]: any;
 }
+
+interface HealthData {
+  baseDie: number;
+  autoHpMode: "rolar" | "media" | "maximo";
+  hpPerLevel: number[];
+  maxHP: number;
+  currentHP: number;
+  tempHP: number;
+}
+
 
 interface RPGLevelsSettings {
 	currentXP: number;
@@ -47,13 +59,11 @@ interface RPGLevelsSettings {
         taskHard: number;
 		questComplete: number;
 	};
-	health: {
-    currentHP: number;
-    maxHP: number;
-    tempHP: number;
-    baseDie: number; // ex: 8 para d8
-    hpPerLevel: number[]; // histórico de HP ganho por nível
-    };
+	
+	health: HealthData;
+
+ 
+
 
 	quests: {
 		[id: string]: {
@@ -93,12 +103,13 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
 		Charisma: 10,
 	  },
 	health: {
-    currentHP: 8,
-    maxHP: 8,
-    tempHP: 0,
-    baseDie: 8, // padrão d8
-    hpPerLevel: [8],
-  },
+  baseDie: 8,
+  autoHpMode: "rolar",
+  hpPerLevel: [8],
+  maxHP: 8,
+  currentHP: 8,
+  tempHP: 0
+ },
 
 	effectFolders: [],
 	repeatableEffectFolders: [],
@@ -147,6 +158,13 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
 	editDebounceTime: 10000, // Default: 10 seconds
 	minEditLength: 20 // Default: 20 characters
 };
+
+function calcularHPPorNivel(baseDie: number, modo: "rolar" | "media" | "maximo"): number {
+  const dado = new Dice(baseDie);
+  if (modo === "rolar") return dado.roll();
+  if (modo === "media") return dado.average();
+  return dado.sides; // modo === "maximo"
+}
 
 // Define a type for achievement info
 interface AchievementInfo {
@@ -512,9 +530,14 @@ export default class RPGLevelsPlugin extends Plugin {
 
   this.settings.characterStats = finalStats;
 
+  
+  // Calcular bônus de Constituição
+  const conMod = Math.floor(this.settings.characterStats.Constitution / 2 - 5);
+  const conBonusHP = conMod * this.settings.level;
+
   // Atualiza HP
   const baseHP = this.settings.health.hpPerLevel.reduce((a, b) => a + b, 0);
-  this.settings.health.maxHP = baseHP + featHpBonus;
+  this.settings.health.maxHP = baseHP + featHpBonus + conBonusHP;
   this.settings.health.tempHP = featTempHP;
 
   await this.saveSettings();
@@ -677,8 +700,19 @@ export default class RPGLevelsPlugin extends Plugin {
 		};
 
 		const conMod = Math.floor((this.settings.characterStats.Constitution - 10) / 2);
-        const hpRoll = this.rollHP(); // função que permite alterar ou rolar o dado
-        const gainedHP = Math.max(1, hpRoll + conMod);
+        const modoHP = this.settings.health.autoHpMode ?? "maximo";
+        const baseDie = this.settings.health.baseDie;
+
+       let hpBase: number;
+
+      if (this.settings.level === 1) {
+       hpBase = baseDie; // Sempre ganha o máximo no nível 1
+       } else {
+       hpBase = calcularHPPorNivel(baseDie, modoHP);
+      }
+
+     const gainedHP = Math.max(1, hpBase + conMod);
+
 
         this.settings.health.hpPerLevel.push(gainedHP);
         this.settings.health.maxHP += gainedHP;
@@ -1488,9 +1522,25 @@ class HPManagementModal extends Modal {
     });
 
     // Mostrar o dado de HP
+    const hpDice = new Dice(health.baseDie);
     contentEl.createEl("p", {
-      text: `🎲 Dado de HP usado: d${health.baseDie}`
+      text: `🎲 Dado de HP usado: ${hpDice.toString()}`
     });
+
+    // Modo de rolagem
+    contentEl.createEl("h3", { text: "⚙️ Modo de Ganho de HP por Nível" });
+
+    const select = contentEl.createEl("select");
+    ["rolar", "media", "maximo"].forEach(modo => {
+      const opt = select.createEl("option", { text: modo });
+      if (modo === this.plugin.settings.health.autoHpMode) opt.selected = true;
+    });
+
+    select.onchange = () => {
+      this.plugin.settings.health.autoHpMode = select.value as "rolar" | "media" | "maximo";
+      this.plugin.saveSettings();
+      new Notice(`Modo de HP ajustado para: ${select.value}`);
+    };
 
     // Mostrar dados por nível
     contentEl.createEl("h3", { text: "📈 HP por Nível (dados rolados)" });
@@ -1499,22 +1549,45 @@ class HPManagementModal extends Modal {
       list.createEl("li", { text: `Nível ${idx + 1}: ${val} HP` });
     });
 
-    // ➕ Botão de treino: adicionar +1 HP ao nível atual
-    contentEl.createEl("button", { text: "🏋️ Treinar +1 HP neste nível" }).onclick = async () => {
-      const level = this.plugin.settings.level;
-      if (health.hpPerLevel.length < level) {
-        new Notice("Você ainda não ganhou HP neste nível.");
-        return;
-      }
+    // Botão de treino
+    const level = this.plugin.settings.level;
+    const currentLevelIndex = level - 1;
 
-      health.hpPerLevel[level - 1]++;
-      health.maxHP++;
-      health.currentHP++;
-      await this.plugin.saveSettings();
-      new Notice("HP aumentado por treino.");
-      this.close();
-      new HPManagementModal(this.app, this.plugin).open();
-    };
+   contentEl.createEl("h3", { text: "🏋️ Treinar HP de um nível específico" });
+
+  const trainWrapper = contentEl.createDiv();
+  const levelSelect = trainWrapper.createEl("select");
+  const trainButton = trainWrapper.createEl("button", { text: "Treinar +1 HP" });
+
+  for (let i = 0; i < health.hpPerLevel.length; i++) {
+   const option = levelSelect.createEl("option", {
+     text: `Nível ${i + 1}`,
+     value: i.toString(),
+   });
+  }
+
+ trainButton.onclick = async () => {
+  const index = parseInt(levelSelect.value);
+  const current = health.hpPerLevel[index];
+  const maxPossible = health.baseDie;
+
+  if (current >= maxPossible) {
+    new Notice(`Nível ${index + 1} já atingiu o HP máximo possível do dado (${maxPossible}).`);
+    return;
+  }
+
+  health.hpPerLevel[index]++;
+  health.maxHP++;
+  health.currentHP++;
+  await this.plugin.saveSettings();
+
+  new Notice(`Nível ${index + 1} treinado: +1 HP`);
+  this.close();
+  new HPManagementModal(this.app, this.plugin).open();
+ };
+
+ const conMod = Math.floor((this.plugin.settings.characterStats.Constitution - 10) / 2);
+ const constitutionHPBonus = conMod * this.plugin.settings.level;
 
     // Mostrar bônus separados
     contentEl.createEl("h3", { text: "✨ Bônus de HP" });
@@ -1528,7 +1601,7 @@ class HPManagementModal extends Modal {
     });
 
     contentEl.createEl("h3", {
-      text: `🔢 Total de HP Máximo: ${health.maxHP} = ${totalHPFromLevels} (níveis) + ${featHPBonus} (feats) + ${effectHPBonus} (efeitos)`
+      text: `🔢 Total de HP Máximo: ${totalHPFromLevels + featHPBonus + effectHPBonus + constitutionHPBonus} = ${totalHPFromLevels} (níveis) + ${featHPBonus} (feats) + ${effectHPBonus} (efeitos) + ${constitutionHPBonus} (Constituição)`
     });
 
     // Botão: Curar totalmente
@@ -2371,6 +2444,23 @@ new Setting(containerEl)
         await this.plugin.saveSettings();
       }
     }));
+
+	new Setting(containerEl)
+  .setName('Modo de ganho de HP por nível')
+  .setDesc('Escolha se quer o valor máximo, médio ou rolar o dado para os próximos níveis')
+  .addDropdown(drop => {
+    drop.addOption("maximo", "Sempre o Máximo");
+    drop.addOption("media", "Média");
+    drop.addOption("rolar", "Rolar o Dado");
+
+    drop.setValue(this.plugin.settings.health.autoHpMode);
+    drop.onChange(async (value: "maximo" | "media" | "rolar") => {
+      this.plugin.settings.health.autoHpMode = value;
+      await this.plugin.saveSettings();
+      new Notice(`Modo de ganho de HP ajustado para: ${value}`);
+    });
+  });
+
 
 
 

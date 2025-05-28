@@ -29,6 +29,7 @@ interface HealthData {
   maxHP: number;
   currentHP: number;
   tempHP: number;
+  lastMaxHP: number;
 }
 
 interface TrainingEntry {
@@ -115,6 +116,7 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
   hpPerLevel: [8],
   maxHP: 8,
   currentHP: 8,
+  lastMaxHP: 0,
   tempHP: 0
  },
 
@@ -539,18 +541,39 @@ export default class RPGLevelsPlugin extends Plugin {
 
   this.settings.characterStats = finalStats;
 
+  // Health
   
-  // Calcular bônus de Constituição
-  const conMod = Math.floor(this.settings.characterStats.Constitution / 2 - 5);
-  const conBonusHP = conMod * this.settings.level;
+ const baseHP = this.settings.health.hpPerLevel.reduce((a, b) => a + b, 0);
+ const conMod = Math.floor(this.settings.characterStats.Constitution / 2 - 5);
+ const conBonusHP = conMod * this.settings.level;
+ const newMaxHP = baseHP + featHpBonus + conBonusHP;
 
-  // Atualiza HP
-  const baseHP = this.settings.health.hpPerLevel.reduce((a, b) => a + b, 0);
-  this.settings.health.maxHP = baseHP + featHpBonus + conBonusHP;
-  this.settings.health.tempHP = featTempHP;
+ this.settings.health.tempHP = featTempHP;
+ this.settings.health.maxHP = newMaxHP;
+
+ const currentHP = this.settings.health.currentHP;
+ const lastMaxHP = this.settings.health.lastMaxHP ?? 0;
+
+ if (newMaxHP > lastMaxHP) {
+  // 🎯 Ganhou maxHP → cura a diferença
+  const delta = newMaxHP - lastMaxHP;
+  this.settings.health.currentHP = Math.min(currentHP + delta, newMaxHP);
+ } else if (newMaxHP < lastMaxHP) {
+  // 🧠 Perdeu maxHP → converte o excesso em tempHP
+  const overflow = currentHP - newMaxHP;
+  if (overflow > 0) {
+    this.settings.health.currentHP = newMaxHP;
+    this.settings.health.tempHP = Math.max(this.settings.health.tempHP, overflow);
+  }
+ }
+
+ // Atualiza registro do último maxHP conhecido
+ this.settings.health.lastMaxHP = newMaxHP;
+
+
 
   await this.saveSettings();
-}
+ }
 
 
 	

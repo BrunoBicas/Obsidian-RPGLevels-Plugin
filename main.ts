@@ -11,6 +11,13 @@ interface CharacterStats {
 	Charisma: number;
 }
 
+
+interface CharacterDefenses {
+    resistances: { [damageType: string]: string[] }; // Fontes de resistência
+    immunities: { [damageType: string]: string[] };  // Fontes de imunidade
+    // vulnerabilities?: { [damageType: string]: string[] }; // Para expansão futura
+}
+
 interface EffectData {
   notePath: string;
   startDate?: string;
@@ -28,8 +35,21 @@ interface HealthData {
   hpPerLevel: number[];
   maxHP: number;
   currentHP: number;
-  tempHP: number;
+  tempHP: number; // This will store temp HP from items/effects
+  manualTempHP?: number; // Temp HP from manual grants
   lastMaxHP: number;
+}
+
+interface SkillDefinition {
+    name: string;
+    baseAbility: keyof CharacterStats; // e.g., "Dexterity"
+}
+
+interface LoadedSkillDefinition {
+    id: string; // Nome do arquivo sem .md (e.g., "Acrobatics")
+    displayName: string; // Nome para exibição
+    baseAbility: keyof CharacterStats;
+    filePath: string; // Path completo da nota, para referência
 }
 
 interface TrainingEntry {
@@ -96,6 +116,17 @@ interface RPGLevelsSettings {
 	initializedNoteCount: boolean;
 	editDebounceTime: number; // Time in milliseconds to wait before awarding edit XP
 	minEditLength: number; // Minimum number of characters changed to award XP
+	damageTypes: string[];
+    defenses: CharacterDefenses;
+	proficiencyBonus: number; //
+    proficiencies: { /* ... */ }; //
+    skillProficiencies: {
+        [skillName: string]: {
+            level: "none" | "proficient" | "expert";
+            sources: string[]; // Paths das notas de feat/effect
+        }
+    };
+	skillFolders: string[];
 }
 
 const DEFAULT_SETTINGS: RPGLevelsSettings = {
@@ -117,10 +148,29 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
   maxHP: 8,
   currentHP: 8,
   lastMaxHP: 0,
-  tempHP: 0
+  tempHP: 0, // Temp HP from items/effects
+  manualTempHP: 0 // Temp HP from manual grants
  },
 
     trainingLog: {},
+	damageTypes: [
+        'Slashing', 'Piercing', 'Bludgeoning', 'Fire', 'Cold', 'Lightning',
+        'Thunder', 'Poison', 'Acid', 'Psychic', 'Necrotic', 'Radiant', 'Force',
+        'Typeless' // Dano sem tipo específico
+    ],
+    defenses: {
+        resistances: {},
+        immunities: {}
+    },
+	proficiencyBonus: 2, //
+    proficiencies: { /* ... */ }, //
+
+
+    skillProficiencies: {}, // Será populado por applyAllPassiveEffects
+	skillFolders: [],
+
+	
+
 
 	effectFolders: [],
 	repeatableEffectFolders: [],
@@ -203,6 +253,74 @@ export default class RPGLevelsPlugin extends Plugin {
   const diffDays = Math.floor((now.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
   return diffDays >= effect.durationDays;
  } 
+
+ public getAbilityModifier(statValue: number): number {
+    return Math.floor((statValue - 10) / 2);
+ }
+  // Calculate Proficiency Bonus based on D&D 5e rules
+ public calculateProficiencyBonus(): number {
+    const level = this.settings.level;
+    if (level >= 17) return 6;
+    if (level >= 13) return 5;
+    if (level >= 9) return 4;
+    if (level >= 5) return 3;
+    return 2; // Levels 1-4
+  }
+
+  public async loadSkillDefinitions(): Promise<LoadedSkillDefinition[]> {
+    const loadedSkills: LoadedSkillDefinition[] = [];
+    if (!this.settings.skillFolders || this.settings.skillFolders.length === 0) {
+        return [];
+    }
+
+    for (const folderPath of this.settings.skillFolders) {
+        const folder = this.app.vault.getAbstractFileByPath(folderPath);
+        if (folder instanceof TFolder) {
+            for (const file of folder.children) {
+                if (file instanceof TFile && file.extension === "md") {
+                    const metadata = this.app.metadataCache.getFileCache(file)?.frontmatter;
+                    if (metadata && metadata.baseAbility) {
+                        const baseAbility = metadata.baseAbility as keyof CharacterStats;
+                        // Valida se baseAbility é uma chave válida de CharacterStats
+                        if (Object.keys(this.settings.characterStats).includes(baseAbility)) {
+                            const skillId = file.basename; // Nome do arquivo sem extensão
+                            loadedSkills.push({
+                                id: skillId,
+                                displayName: metadata.displayName || skillId, // Usa displayName do frontmatter ou o nome do arquivo
+                                baseAbility: baseAbility,
+                                filePath: file.path
+                            });
+                        } else {
+                            new Notice(`Skill note "${file.path}" has an invalid baseAbility: ${baseAbility}. Skipping.`);
+                        }
+                    } else {
+                        // Opcional: Avisar sobre notas de skill sem frontmatter 'baseAbility'
+                        // new Notice(`Skill note "${file.path}" is missing 'baseAbility' in frontmatter. Skipping.`);
+                    }
+                }
+            }
+        }
+    }
+    // Ordenar alfabeticamente pelo displayName para consistência na UI
+    loadedSkills.sort((a, b) => a.displayName.localeCompare(b.displayName));
+    return loadedSkills;
+  }
+  
+
+ public getEffectsFromSpecificFolder(folderPath: string, activeEffectPathsToExclude: string[] = [], allowDuplicates: boolean): TFile[] {
+    const folder = this.app.vault.getAbstractFileByPath(folderPath);
+    const availableEffects: TFile[] = [];
+    if (folder instanceof TFolder) { // [cite: 65]
+        for (const child of folder.children) { // [cite: 65]
+            if (child instanceof TFile && child.extension === "md") { // [cite: 65]
+                if (allowDuplicates || !activeEffectPathsToExclude.includes(child.path)) {
+                    availableEffects.push(child);
+                }
+            }
+        }
+    }
+    return availableEffects;
+ }
 
  getDaysRemaining(effect: EffectData): number | null {
   if (effect.permanent || !effect.startDate || !effect.durationDays) return null;
@@ -483,97 +601,160 @@ export default class RPGLevelsPlugin extends Plugin {
  }
 
  async applyAllPassiveEffects() {
-  const statsBase = {
-    Strength: 10,
-    Dexterity: 10,
-    Constitution: 10,
-    Intelligence: 10,
-    Wisdom: 10,
-    Charisma: 10
-  };
+    const statsBase = { // [cite: 74]
+        Strength: 10, Dexterity: 10, Constitution: 10, Intelligence: 10, Wisdom: 10, Charisma: 10 // [cite: 74]
+    };
+    const statBonus: Partial<CharacterStats> = { // [cite: 75]
+        Strength: 0, Dexterity: 0, Constitution: 0, Intelligence: 0, Wisdom: 0, Charisma: 0 // [cite: 75]
+    };
+    let featHpBonus = 0; // [cite: 76]
+    let featTempHP = 0; // [cite: 76]
 
-  const statBonus: Partial<CharacterStats> = {
-    Strength: 0,
-    Dexterity: 0,
-    Constitution: 0,
-    Intelligence: 0,
-    Wisdom: 0,
-    Charisma: 0
-  };
-  
-
-  let featHpBonus = 0;
-  let featTempHP = 0;
-
-  const allSources = [
-    ...this.settings.obtainedFeats,
-    ...Object.values(this.settings.effects).filter(e => e.active && !this.isEffectExpired(e)).map(e => e.notePath)
-  ];
-
-  while (this.settings.health.hpPerLevel.length < this.settings.level) {
-  this.settings.health.hpPerLevel.push(this.settings.health.baseDie);
-  }
-
-  for (const path of allSources) {
-    const data = await this.loadEffectFromNote(path);
-
-    if (data.hpBonus) featHpBonus += data.hpBonus;
-    if (data.tempHP) featTempHP = Math.max(featTempHP, data.tempHP);
-
-    for (const [key, value] of Object.entries(data)) {
-      if (key in statBonus && typeof value === "number") {
-        statBonus[key as keyof CharacterStats]! += value;
-      }
+    // Inicializa ou limpa defesas para reconstrução
+    if (!this.settings.defenses) {
+        this.settings.defenses = { resistances: {}, immunities: {} };
+    } else {
+        this.settings.defenses.resistances = {};
+        this.settings.defenses.immunities = {};
     }
-  }
+	// NOVA INICIALIZAÇÃO PARA SKILL PROFICIENCIES
+    this.settings.skillProficiencies = {};
 
-  // Atributos finais = base + aumento por level + bônus de feats/efeitos
-  const statLevelBonus = Math.floor(this.settings.level / 4);
-  const finalStats: CharacterStats = {} as CharacterStats;
+    const allSources = [ // [cite: 76]
+        ...this.settings.obtainedFeats, // [cite: 76]
+        ...Object.values(this.settings.effects).filter(e => e.active && !this.isEffectExpired(e)).map(e => e.notePath) // [cite: 76]
+    ];
 
-  for (const key of Object.keys(statsBase)) {
-    finalStats[key as keyof CharacterStats] =
-  statsBase[key as keyof CharacterStats]! +
-  statLevelBonus +
-  (this.settings.spentFeatPoints.statIncreases[key as keyof CharacterStats] ?? 0) +
-  (statBonus[key as keyof CharacterStats] ?? 0);
-  }
+    // Garante que hpPerLevel tenha entradas suficientes
+    while (this.settings.health.hpPerLevel.length < this.settings.level) { // [cite: 77]
+        this.settings.health.hpPerLevel.push(calcularHPPorNivel(this.settings.health.baseDie, this.settings.health.autoHpMode)); // Similar to [cite: 77, 111]
+    }
 
-  this.settings.characterStats = finalStats;
+    for (const path of allSources) { // [cite: 77]
+        const data = await this.loadEffectFromNote(path); // [cite: 77]
+        if (data.hpBonus) featHpBonus += data.hpBonus; // [cite: 78]
+        if (data.tempHP) featTempHP = Math.max(featTempHP, data.tempHP); // [cite: 78]
 
-  // Health
-  
- const baseHP = this.settings.health.hpPerLevel.reduce((a, b) => a + b, 0);
- const conMod = Math.floor(this.settings.characterStats.Constitution / 2 - 5);
- const conBonusHP = conMod * this.settings.level;
- const newMaxHP = baseHP + featHpBonus + conBonusHP;
+        for (const [key, value] of Object.entries(data)) { // [cite: 79]
+            if (key in statBonus && typeof value === "number") { // [cite: 79]
+                (statBonus[key as keyof CharacterStats]! as number) += value; // [cite: 79, 80]
+            }
+        }
 
- this.settings.health.tempHP = featTempHP;
- this.settings.health.maxHP = newMaxHP;
+        // Processar resistências concedidas
+        if (data.grantsResistances && Array.isArray(data.grantsResistances)) {
+            data.grantsResistances.forEach(type => {
+                if (typeof type === 'string') { // Checagem de tipo
+                    if (!this.settings.defenses.resistances[type]) {
+                        this.settings.defenses.resistances[type] = [];
+                    }
+                    if (!this.settings.defenses.resistances[type].includes(path)) {
+                        this.settings.defenses.resistances[type].push(path);
+                    }
+                }
+            });
+        }
 
- const currentHP = this.settings.health.currentHP;
- const lastMaxHP = this.settings.health.lastMaxHP ?? 0;
+        // Processar imunidades concedidas
+        if (data.grantsImmunities && Array.isArray(data.grantsImmunities)) {
+            data.grantsImmunities.forEach(type => {
+                if (typeof type === 'string') { // Checagem de tipo
+                    if (!this.settings.defenses.immunities[type]) {
+                        this.settings.defenses.immunities[type] = [];
+                    }
+                    if (!this.settings.defenses.immunities[type].includes(path)) {
+                        this.settings.defenses.immunities[type].push(path);
+                    }
+                }
+            });
+        }
 
- if (newMaxHP > lastMaxHP) {
-  // 🎯 Ganhou maxHP → cura a diferença
-  const delta = newMaxHP - lastMaxHP;
-  this.settings.health.currentHP = Math.min(currentHP + delta, newMaxHP);
- } else if (newMaxHP < lastMaxHP) {
-  // 🧠 Perdeu maxHP → converte o excesso em tempHP
-  const overflow = currentHP - newMaxHP;
-  if (overflow > 0) {
-    this.settings.health.currentHP = newMaxHP;
-    this.settings.health.tempHP = Math.max(this.settings.health.tempHP, overflow);
-  }
- }
+		const processSkillLevel = (skillName: string, level: "proficient" | "expert", sourcePath: string) => {
+            if (!this.settings.skillProficiencies[skillName]) {
+                this.settings.skillProficiencies[skillName] = { level: "none", sources: [] };
+            }
 
- // Atualiza registro do último maxHP conhecido
- this.settings.health.lastMaxHP = newMaxHP;
+            const current = this.settings.skillProficiencies[skillName];
+            // Expertise sobrescreve proficiência. Proficiência sobrescreve none.
+            if (level === "expert") {
+                current.level = "expert";
+            } else if (level === "proficient" && current.level !== "expert") {
+                current.level = "proficient";
+            }
+
+            if (!current.sources.includes(sourcePath)) {
+                current.sources.push(sourcePath);
+            }
+        };
+
+        if (data.grantsSkillProficiency && Array.isArray(data.grantsSkillProficiency)) {
+            data.grantsSkillProficiency.forEach(skillName => {
+                if (typeof skillName === 'string') { //
+                    processSkillLevel(skillName, "proficient", path);
+                }
+            });
+        }
+        if (data.grantsSkillExpertise && Array.isArray(data.grantsSkillExpertise)) {
+            data.grantsSkillExpertise.forEach(skillName => {
+                if (typeof skillName === 'string') { //
+                    processSkillLevel(skillName, "expert", path);
+                }
+            });
+        }
+    }
+	
+
+    const statLevelBonus = Math.floor(this.settings.level / 4); // [cite: 80]
+    const finalStats: CharacterStats = {} as CharacterStats; // [cite: 81]
+
+    for (const key of Object.keys(statsBase)) { // [cite: 81]
+        finalStats[key as keyof CharacterStats] = // [cite: 81]
+            statsBase[key as keyof CharacterStats]! + // [cite: 81, 82]
+            statLevelBonus + // [cite: 82]
+            (this.settings.spentFeatPoints.statIncreases[key as keyof CharacterStats] ?? 0) + // [cite: 82]
+            (statBonus[key as keyof CharacterStats] ?? 0); // [cite: 82]
+    }
+
+    this.settings.characterStats = finalStats; // [cite: 83]
+    
+    // Health
+    const baseHP = this.settings.health.hpPerLevel.reduce((a, b) => a + b, 0); // [cite: 83]
+    const conMod = Math.floor((this.settings.characterStats.Constitution -10) / 2); // Similar to [cite: 84, 109]
+    const conBonusHP = conMod * this.settings.level; // [cite: 84]
+    const newMaxHP = baseHP + featHpBonus + conBonusHP; // [cite: 85]
+
+    // ATUALIZAÇÃO PARA TEMP HP (considerando manualTempHP)
+    this.settings.health.tempHP = featTempHP; // Armazena temp HP de itens/efeitos
+    // O tempHP efetivo será max(itemTempHP, manualTempHP) no momento do uso/exibição
+
+    this.settings.health.maxHP = newMaxHP; // [cite: 85]
+
+    const currentHP = this.settings.health.currentHP; // [cite: 85]
+    const lastMaxHP = this.settings.health.lastMaxHP ?? 0; // [cite: 86]
+
+    if (newMaxHP > lastMaxHP) { // [cite: 86]
+        const delta = newMaxHP - lastMaxHP; // [cite: 86]
+        this.settings.health.currentHP = Math.min(currentHP + delta, newMaxHP); // [cite: 87]
+    } else if (newMaxHP < lastMaxHP && currentHP > newMaxHP) { // Adaptado de [cite: 87, 88]
+        // Se perdeu maxHP e currentHP está acima do novo maxHP,
+        // o excesso não vira tempHP automaticamente aqui, a menos que uma regra específica dite.
+        // Geralmente, currentHP é limitado ao novo maxHP.
+        // A lógica original de converter excesso em tempHP é mais uma regra de casa.
+        // Mantendo simples por enquanto:
+        this.settings.health.currentHP = Math.min(currentHP, newMaxHP);
+        // Se quiser a lógica de overflow para tempHP:
+        // const overflow = currentHP - newMaxHP;
+        // if (overflow > 0) {
+        //    this.settings.health.currentHP = newMaxHP;
+        //    this.settings.health.manualTempHP = Math.max(this.settings.health.manualTempHP ?? 0, overflow);
+        // }
+    }
 
 
-
-  await this.saveSettings();
- }
+    this.settings.health.lastMaxHP = newMaxHP; // [cite: 89]
+	this.settings.proficiencyBonus = this.calculateProficiencyBonus();
+    await this.saveSettings(); // [cite: 89]
+}
 
 
 	
@@ -686,22 +867,35 @@ export default class RPGLevelsPlugin extends Plugin {
 		}
 	}
 
-	async loadEffectFromNote(path: string): Promise<Partial<EffectData>> {
-  const file = this.app.vault.getAbstractFileByPath(path);
-  if (!(file instanceof TFile)) return {};
+	async loadEffectFromNote(path: string): Promise<Partial<EffectData>> { //
+    const file = this.app.vault.getAbstractFileByPath(path); //
+    if (!(file instanceof TFile)) return {}; //
 
-  const metadata = this.app.metadataCache.getFileCache(file)?.frontmatter;
-  if (!metadata) return {};
+    const metadata = this.app.metadataCache.getFileCache(file)?.frontmatter; //
+    if (!metadata) return {}; //
 
-  const result: Partial<EffectData> = {};
+    const result: Partial<EffectData> = {}; //
 
-  for (const [key, value] of Object.entries(metadata)) {
-    if (typeof value === "number") {
-      result[key] = value;
+    for (const [key, value] of Object.entries(metadata)) { //
+        if (typeof value === "number") { //
+            result[key] = value; //
+        } else if ((key === "grantsResistances" || key === "grantsImmunities") && Array.isArray(value)) { //
+            if (value.every(item => typeof item === 'string')) { //
+                result[key as 'grantsResistances' | 'grantsImmunities'] = value as string[]; //
+            }
+        }
+        // NOVA LÓGICA PARA SKILL PROFICIENCIES E EXPERTISE
+        else if ((key === "grantsSkillProficiency" || key === "grantsSkillExpertise") && Array.isArray(value)) {
+            if (value.every(item => typeof item === 'string')) {
+                result[key as 'grantsSkillProficiency' | 'grantsSkillExpertise'] = value as string[];
+            }
+        }
+        // FIM DA NOVA LÓGICA PARA SKILLS
+        else if (key === "permanent" && typeof value === "boolean") { //
+            result[key] = value; //
+        }
     }
-  }
-
-  return result;
+    return result; //
  }
 
 	
@@ -1113,183 +1307,200 @@ class FolderSuggestModal extends FuzzySuggestModal<TFolder> {
 	}
 }
 
+// [[NO SEU ARQUIVO 10.txt, SUBSTITUA A CLASSE EffectsModal EXISTENTE POR ESTA]]
+
 class EffectsModal extends Modal {
   plugin: RPGLevelsPlugin;
 
   constructor(app: App, plugin: RPGLevelsPlugin) {
     super(app);
-    this.plugin = plugin;
+    this.plugin = plugin; // [cite: 162]
   }
 
   onOpen() {
-  const { contentEl } = this;
-  contentEl.createEl("h2", { text: "Efeitos Ativos" });
+    const { contentEl } = this;
+    contentEl.empty(); // Limpa conteúdo anterior para evitar duplicação ao reabrir
+    contentEl.createEl("h2", { text: "Efeitos Ativos e Disponíveis" }); // [cite: 162]
 
-  // === Limpa efeitos expirados ===
-  const rawEffects: Record<string, EffectData> = this.plugin.settings.effects ?? {};
-  const activeEffects: Record<string, EffectData> = {};
-  let expiredCount = 0;
-
-  for (const [id, effect] of Object.entries(rawEffects)) {
-    if (this.plugin.isEffectExpired(effect)) {
-      expiredCount++;
-      continue;
+    // === Limpa efeitos expirados ===
+    const rawEffects: Record<string, EffectData> = this.plugin.settings.effects ?? {}; // [cite: 163]
+    const activeEffectsFromSettings: Record<string, EffectData> = {}; // [cite: 164]
+    let expiredCount = 0; // [cite: 164]
+    for (const [id, effect] of Object.entries(rawEffects)) { // [cite: 165]
+        if (this.plugin.isEffectExpired(effect)) { // [cite: 165]
+            expiredCount++; // [cite: 165]
+            continue; // [cite: 165]
+        }
+        activeEffectsFromSettings[id] = effect; // [cite: 166]
     }
-    activeEffects[id] = effect;
-  }
 
-  this.plugin.settings.effects = activeEffects;
-  if (expiredCount > 0) {
-    this.plugin.saveSettings();
-    new Notice(`${expiredCount} efeito(s) expirado(s) foram removidos.`);
-  }
+    this.plugin.settings.effects = activeEffectsFromSettings; // [cite: 166]
+    if (expiredCount > 0) { // [cite: 167]
+        this.plugin.saveSettings(); // [cite: 167]
+        new Notice(`${expiredCount} efeito(s) expirado(s) foram removidos.`); // [cite: 167]
+    }
 
-  // === Renderiza efeitos ativos ===
-  const effectKeys = Object.keys(activeEffects);
-  if (effectKeys.length === 0) {
-    contentEl.createEl("p", { text: "Nenhum efeito ativo." });
-  } else {
-    effectKeys.forEach(key => {
-      const effect = activeEffects[key];
-      const isExpired = this.plugin.isEffectExpired(effect);
-      const remaining = this.plugin.getTimeRemaining(effect);
+    // === Renderiza efeitos ativos ===
+    contentEl.createEl("h3", { text: "Efeitos Ativos Atualmente" });
+    const effectKeys = Object.keys(activeEffectsFromSettings); // [cite: 168]
+    if (effectKeys.length === 0) { // [cite: 169]
+        contentEl.createEl("p", { text: "Nenhum efeito ativo." }); // [cite: 169]
+    } else {
+        effectKeys.forEach(key => { // [cite: 170]
+            const effect = activeEffectsFromSettings[key]; // [cite: 170]
+            const isExpired = this.plugin.isEffectExpired(effect); // [cite: 170]
+            const remaining = this.plugin.getTimeRemaining(effect); // [cite: 170]
 
-      const effectDiv = contentEl.createDiv({ cls: "effect-item" });
-      effectDiv.style.border = "1px solid var(--background-modifier-border)";
-      effectDiv.style.borderRadius = "5px";
-      effectDiv.style.padding = "10px";
-      effectDiv.style.marginBottom = "10px";
+            const effectDiv = contentEl.createDiv({ cls: "effect-item" }); // [cite: 170]
+            // ... (estilização do effectDiv como no seu código original) ...
+            effectDiv.style.border = "1px solid var(--background-modifier-border)"; // [cite: 170]
+            effectDiv.style.borderRadius = "5px"; // [cite: 170]
+            effectDiv.style.padding = "10px"; // [cite: 170]
+            effectDiv.style.marginBottom = "10px"; // [cite: 170]
 
-      effectDiv.createEl("h4", { text: effect.notePath });
 
-      effectDiv.createEl("p", {
-        text: effect.permanent
-          ? "⏳ Permanente"
-          : isExpired
-            ? "❌ Expirado"
-            : `🕒 ${remaining?.days} dia(s) e ${remaining?.hours} hora(s) restantes`
-      });
+            effectDiv.createEl("h4", { text: effect.notePath }); // [cite: 170]
+            effectDiv.createEl("p", { // [cite: 171]
+                text: effect.permanent // [cite: 171]
+                    ? "⏳ Permanente" // [cite: 171]
+                    : isExpired // [cite: 171]
+                        ? "❌ Expirado" // [cite: 171]
+                        : `🕒 ${remaining?.days} dia(s) e ${remaining?.hours} hora(s) restantes` // [cite: 171]
+            });
 
-      if (isExpired) {
-        effectDiv.style.opacity = "0.5";
-      }
+            if (isExpired) { // [cite: 171]
+                effectDiv.style.opacity = "0.5"; // [cite: 171]
+            }
 
-      const buttonRow = effectDiv.createDiv({ cls: "button-row" });
+            const buttonRow = effectDiv.createDiv({ cls: "button-row" }); // [cite: 172]
+            const openBtn = buttonRow.createEl("button", { text: "Abrir Nota" }); // [cite: 172]
+            openBtn.onclick = () => { // [cite: 173]
+                this.app.workspace.openLinkText(effect.notePath, '', false); // [cite: 173]
+            };
+            const removeBtn = buttonRow.createEl("button", { text: "Remover Efeito" }); // [cite: 174]
+            removeBtn.onclick = async () => { // [cite: 174]
+                delete this.plugin.settings.effects[key]; // [cite: 174]
+                await this.plugin.applyAllPassiveEffects(); // Adicionado para recalcular status
+                await this.plugin.saveSettings(); // [cite: 175]
+                this.onOpen(); // Recarrega o modal para atualizar a lista
+            };
+        });
+    }
+    contentEl.createEl("hr");
 
-      const openBtn = buttonRow.createEl("button", { text: "Abrir Nota" });
-      openBtn.onclick = () => {
-        this.app.workspace.openLinkText(effect.notePath, '', false);
-      };
+    // === Seção de Adição de Efeitos (com pastas recolhíveis) ===
+    const currentActiveEffectPaths = Object.values(activeEffectsFromSettings).map(e => e.notePath); // [cite: 176]
 
-      const removeBtn = buttonRow.createEl("button", { text: "Remover" });
-      removeBtn.onclick = async () => {
-        delete this.plugin.settings.effects[key];
-        await this.plugin.saveSettings();
-        this.close();
-        new EffectsModal(this.app, this.plugin).open();
-      };
+    // --- Efeitos Únicos Disponíveis ---
+    contentEl.createEl("h3", { text: "Efeitos Únicos Disponíveis (por Pasta)" }); // [cite: 175]
+    if (this.plugin.settings.effectFolders.length === 0) {
+        contentEl.createEl("p", {text: "Nenhuma pasta de efeitos únicos configurada nas settings."});
+    }
+    this.plugin.settings.effectFolders.forEach(folderPath => { // Adaptado de [cite: 360]
+        const folderDetails = contentEl.createEl("details");
+        folderDetails.createEl("summary", { text: folderPath });
+        // Usando o novo método da classe principal
+        const effectsInFolder = this.plugin.getEffectsFromSpecificFolder(folderPath, currentActiveEffectPaths, false);
+        
+        if (effectsInFolder.length === 0) { // [cite: 177]
+            folderDetails.createEl("p", { text: "Nenhum efeito único novo disponível nesta pasta." }); // Parcialmente de [cite: 177]
+        } else {
+            effectsInFolder.forEach(effectFile => { // Adaptado de [cite: 178]
+                this.renderEffectEntry(folderDetails, effectFile.path, false); // Passa false para isRepeatable
+            });
+        }
+    });
+
+    // --- Efeitos Repetíveis Disponíveis ---
+    contentEl.createEl("h3", { text: "Efeitos Repetíveis Disponíveis (por Pasta)" }); // [cite: 179]
+    if (this.plugin.settings.repeatableEffectFolders.length === 0) {
+        contentEl.createEl("p", {text: "Nenhuma pasta de efeitos repetíveis configurada nas settings."}); // [cite: 180]
+    }
+    this.plugin.settings.repeatableEffectFolders.forEach(folderPath => { // Adaptado de [cite: 363]
+        const folderDetails = contentEl.createEl("details");
+        folderDetails.createEl("summary", { text: folderPath });
+        // Para repetíveis, não excluímos com base nos ativos
+        const effectsInFolder = this.plugin.getEffectsFromSpecificFolder(folderPath, [], true);
+        
+        if (effectsInFolder.length === 0) { // [cite: 180]
+            folderDetails.createEl("p", { text: "Nenhum efeito repetível disponível nesta pasta." }); // [cite: 180]
+        } else {
+            effectsInFolder.forEach(effectFile => { // Adaptado de [cite: 181]
+                this.renderEffectEntry(folderDetails, effectFile.path, true); // Passa true para isRepeatable
+            });
+        }
     });
   }
 
-  // === Seção de Adição de Efeitos ===
-  contentEl.createEl("h3", { text: "Efeitos únicos disponíveis" });
+  renderEffectEntry(parentElement: HTMLElement, path: string, isRepeatable: boolean) {
+    // 'isRepeatable' pode ser usado para lógicas futuras, mas não é usado ativamente aqui
+    // para diferenciar a adição, já que a filtragem principal ocorre antes.
+    const container = parentElement.createDiv({ cls: "effect-entry" }); // [cite: 182]
+    // ... (estilização do container, header, toggleBtn, configDiv como no seu código original ou na DamageModal)
+    container.style.marginBottom = "10px"; // [cite: 182]
+    container.style.padding = "10px"; // [cite: 183]
+    container.style.border = "1px solid var(--background-modifier-border)"; // [cite: 183]
+    container.style.borderRadius = "5px"; // [cite: 183]
 
-  const addedPaths = Object.values(activeEffects).map(e => e.notePath);
-  const uniqueAvailable = this.plugin.getAvailableEffectsFromFolders()
-    .filter(p => !addedPaths.includes(p));
+    const header = container.createDiv({ cls: "effect-header" }); // [cite: 183]
+    header.style.display = "flex"; // [cite: 184]
+    header.style.justifyContent = "space-between"; // [cite: 184]
+    header.style.alignItems = "center"; // [cite: 184]
 
-  if (uniqueAvailable.length === 0) {
-    contentEl.createEl("p", { text: "Nenhum efeito único disponível." });
-  } else {
-    uniqueAvailable.forEach(path => {
-      this.renderEffectEntry(contentEl, path);
-    });
-  }
+    header.createEl("b", { text: path }); // [cite: 184]
+    const toggleBtn = header.createEl("button", { text: "➕ Adicionar" }); // [cite: 185]
+    const configDiv = container.createDiv(); // [cite: 185]
+    configDiv.style.display = "none"; // [cite: 185]
 
-  contentEl.createEl("h3", { text: "Efeitos repetíveis disponíveis" });
-
-  const repeatableAvailable = this.plugin.getAvailableRepeatableEffects();
-
-  if (repeatableAvailable.length === 0) {
-    contentEl.createEl("p", { text: "Nenhum efeito repetível disponível." });
-  } else {
-    repeatableAvailable.forEach(path => {
-      this.renderEffectEntry(contentEl, path);
-    });
-  }
-}
-
-  renderEffectEntry(contentEl: HTMLElement, path: string) {
-    const container = contentEl.createDiv({ cls: "effect-entry" });
-    container.style.marginBottom = "10px";
-    container.style.padding = "10px";
-    container.style.border = "1px solid var(--background-modifier-border)";
-    container.style.borderRadius = "5px";
-
-    const header = container.createDiv({ cls: "effect-header" });
-    header.style.display = "flex";
-    header.style.justifyContent = "space-between";
-    header.style.alignItems = "center";
-
-    header.createEl("b", { text: path });
-
-    const toggleBtn = header.createEl("button", { text: "➕ Adicionar" });
-    const configDiv = container.createDiv();
-    configDiv.style.display = "none";
-
-    toggleBtn.onclick = () => {
-      const opened = configDiv.style.display === "block";
-      configDiv.style.display = opened ? "none" : "block";
-      toggleBtn.setText(opened ? "➕ Adicionar" : "✖ Cancelar");
+    toggleBtn.onclick = () => { // [cite: 186]
+      const opened = configDiv.style.display === "block"; // [cite: 186]
+      configDiv.style.display = opened ? "none" : "block"; // [cite: 187]
+      toggleBtn.setText(opened ? "➕ Adicionar" : "✖ Cancelar"); // [cite: 187]
     };
 
-    let duration = 3;
-    let permanent = false;
-
-    new Setting(configDiv)
-      .setName("Duração (dias)")
-      .setDesc("Deixe 0 para ignorar")
+    let duration = 3; // [cite: 187]
+    let permanent = false; // [cite: 187]
+    new Setting(configDiv) // [cite: 188]
+      .setName("Duração (dias)") // [cite: 188]
+      .setDesc("Deixe 0 para ignorar se não for permanente") // [cite: 188]
       .addText(text => {
-        text.setPlaceholder("Ex: 3")
-          .setValue(duration.toString())
+        text.setPlaceholder("Ex: 3") // [cite: 188]
+          .setValue(duration.toString()) // [cite: 188]
           .onChange(value => {
-            const parsed = parseInt(value);
-            duration = !isNaN(parsed) && parsed >= 0 ? parsed : 0;
-          });
+            const parsed = parseInt(value); // [cite: 188]
+            duration = !isNaN(parsed) && parsed >= 0 ? parsed : 0; // [cite: 189]
+           });
       });
-
-    new Setting(configDiv)
-      .setName("Permanente")
+    new Setting(configDiv) // [cite: 190]
+      .setName("Permanente") // [cite: 190]
       .addToggle(toggle => {
-        toggle.setValue(permanent).onChange(value => {
-          permanent = value;
+        toggle.setValue(permanent).onChange(value => { // [cite: 190]
+          permanent = value; // [cite: 190]
         });
       });
-
-    new Setting(configDiv)
+    new Setting(configDiv) // [cite: 191]
       .addButton(button => {
-        button.setButtonText("Confirmar")
-          .setCta()
-          .onClick(async () => {
-            const id = `eff_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-            this.plugin.settings.effects[id] = {
-              notePath: path,
-              startDate: new Date().toISOString(),
-              durationDays: permanent ? undefined : duration,
-              permanent,
-              active: true
+        button.setButtonText("Confirmar") // [cite: 191]
+          .setCta() // [cite: 191]
+          .onClick(async () => { // [cite: 191]
+            const id = `eff_${Date.now()}_${Math.floor(Math.random() * 1000)}`; // [cite: 191]
+            this.plugin.settings.effects[id] = { // [cite: 191]
+              notePath: path, // [cite: 191]
+              startDate: new Date().toISOString(), // [cite: 192]
+              durationDays: permanent ? undefined : (duration > 0 ? duration : undefined), // [cite: 192]
+              permanent, // [cite: 192]
+              active: true // [cite: 192]
             };
-			await this.app.metadataCache.trigger("changed", this.app.vault.getAbstractFileByPath(path));
-			await this.plugin.applyAllPassiveEffects();
-            await this.plugin.saveSettings();
-            this.close();
-            new EffectsModal(this.app, this.plugin).open();
+			await this.app.metadataCache.trigger("changed", this.app.vault.getAbstractFileByPath(path)!); // [cite: 192]
+			await this.plugin.applyAllPassiveEffects(); // [cite: 192]
+            await this.plugin.saveSettings(); // [cite: 192]
+            this.onOpen(); // Recarrega o modal para atualizar as listas
           });
       });
   }
 
   onClose() {
-    this.contentEl.empty();
+    this.contentEl.empty(); // [cite: 194]
   }
 }
 
@@ -1305,6 +1516,8 @@ class StatsModal extends Modal {
     const { contentEl } = this;
 	await this.plugin.applyAllPassiveEffects();
     const stats = this.plugin.settings.characterStats;
+    const proficiencyBonus = this.plugin.settings.proficiencyBonus; // Get proficiency bonus
+    const proficiencies = this.plugin.settings.proficiencies; // Get proficiencies
 
     // Se houver imagem configurada, renderiza
     if (this.plugin.settings.characterImagePath) {
@@ -1349,17 +1562,60 @@ class StatsModal extends Modal {
         new FeatsModal(this.app, this.plugin).open();
       };
 
+	  contentEl.createEl("button", { text: "🛡️ View Defenses", cls: "mod-cta" })
+      .onclick = () => {
+        this.close(); // Fecha o StatsModal atual
+        new DefensesModal(this.app, this.plugin).open(); // Abre o DefensesModal
+      };
+
+	  contentEl.createEl("hr"); // Separator
+
     if (this.plugin.settings.characterNotePath) {
       contentEl.createEl("button", { text: "📘 Abrir Página do Personagem", cls: "mod-cta" })
         .onclick = () => {
           this.app.workspace.openLinkText(this.plugin.settings.characterNotePath!, '', false);
         };
     }
+	contentEl.createEl("button", { text: "💪 Manage Abilities & Rolls", cls: "mod-cta" })
+        .onclick = () => {
+            this.close();
+            new AbilitiesModal(this.app, this.plugin).open();
+        };
+    contentEl.createEl("hr"); // Separator
 
-    contentEl.createEl("h2", { text: `Level ${level} - Character Stats` });
-    for (const [stat, value] of Object.entries(stats)) {
-      contentEl.createEl("p", { text: `${stat}: ${value}` });
-    }
+     contentEl.createEl("h2", { text: `Level ${this.plugin.settings.level} - Character Stats` });
+    contentEl.createEl("p", {text: `(Proficiency Bonus: +${proficiencyBonus})`}); // Display proficiency bonus
+
+    const abilityOrder: (keyof CharacterStats)[] = ["Strength", "Dexterity", "Constitution", "Intelligence", "Wisdom", "Charisma"];
+
+    abilityOrder.forEach(statName => {
+        const statValue = stats[statName];
+        const modifier = this.plugin.getAbilityModifier(statValue);
+        const modifierString = modifier >= 0 ? `+${modifier}` : `${modifier}`;
+        const saveProficiencyKey = `${statName.toLowerCase()}Save` as keyof typeof proficiencies;
+
+        // Display Stat, Modifier, and a Roll Button
+        const statSetting = new Setting(contentEl)
+            .setName(`${statName}: ${statValue} (${modifierString})`)
+            .setDesc(`Roll 1d20 + ${modifier}${proficiencies[saveProficiencyKey] ? ` + ${proficiencyBonus} (prof)` : ''}`);
+
+        statSetting.addButton(button => button
+            .setButtonText("🎲 Roll")
+            .onClick(() => {
+                const d20Roll = new Dice(20).roll();
+                let totalRoll = d20Roll + modifier;
+                let rollExplanation = `Rolled ${d20Roll} (d20) + ${modifier} (mod)`;
+
+                if (proficiencies[saveProficiencyKey]) {
+                    totalRoll += proficiencyBonus;
+                    rollExplanation += ` + ${proficiencyBonus} (prof)`;
+                }
+                rollExplanation += ` = ${totalRoll}`;
+                new Notice(`${statName} Roll: ${totalRoll}\n(${rollExplanation})`, 7000);
+            }));
+    });
+    
+    contentEl.createEl("hr");
 
    const featBtn = contentEl.createEl("button", {
   text: "Usar Feat Point para aumentar atributo",
@@ -1704,6 +1960,18 @@ class HPManagementModal extends Modal {
       text: `🔢 Total de HP Máximo: ${totalHPFromLevels + featHPBonus + effectHPBonus + constitutionHPBonus} = ${totalHPFromLevels} (níveis) + ${featHPBonus} (feats) + ${effectHPBonus} (efeitos) + ${constitutionHPBonus} (Constituição)`
     });
 
+	    contentEl.createEl("hr"); // Optional separator
+
+    const damageButton = contentEl.createEl("button", { 
+        text: "⚔️ Damage / Heal / Effects", 
+        cls: "mod-cta" 
+    });
+    damageButton.style.marginTop = "10px"; // Add some spacing
+    damageButton.onclick = () => {
+      this.close(); // Close HPManagementModal
+      new DamageModal(this.app, this.plugin).open(); // Open the new DamageModal
+    };
+
     // Botão: Curar totalmente
     contentEl.createEl("button", { text: "💊 Curar totalmente" }).onclick = async () => {
       this.plugin.settings.health.currentHP = this.plugin.settings.health.maxHP;
@@ -1720,6 +1988,655 @@ class HPManagementModal extends Modal {
 }
 
 
+class DamageModal extends Modal {
+  plugin: RPGLevelsPlugin;
+  // Para armazenar o tipo de dano selecionado nos inputs
+  private selectedDamageType: string; 
+
+  constructor(app: App, plugin: RPGLevelsPlugin) {
+    super(app);
+    this.plugin = plugin;
+    // Inicializa com o primeiro tipo de dano ou 'Typeless' se disponível
+    this.selectedDamageType = this.plugin.settings.damageTypes[0] || 'Typeless'; 
+  }
+
+  getEffectiveTempHP(): number { /* ... (como na resposta anterior) ... */
+    const health = this.plugin.settings.health;
+    return Math.max(health.tempHP || 0, health.manualTempHP || 0);
+  }
+
+  async onOpen() { /* ... (como na resposta anterior, mas selectedDamageType é inicializado no constructor) ... */
+    const { contentEl } = this;
+    contentEl.empty();
+    await this.plugin.applyAllPassiveEffects();
+
+    contentEl.createEl("h2", { text: "⚔️ Damage, Heal & Effects" });
+
+    this.displayCurrentHP(contentEl);
+    this.createDamageSection(contentEl); 
+    this.createHealingSection(contentEl);
+    this.createTempHPSection(contentEl); 
+    this.createApplyEffectsSection(contentEl);
+
+    const refreshButton = contentEl.createEl("button", { text: "🔄 Refresh Display", cls: "mod-neutral" });
+    refreshButton.style.marginTop = "15px";
+    refreshButton.onclick = () => {
+        this.onOpen();
+    };
+  }
+
+  displayCurrentHP(container: HTMLElement) { /* ... (como na resposta anterior) ... */
+    const health = this.plugin.settings.health;
+    const hpContainer = container.createDiv({ cls: "hp-display-container" });
+    hpContainer.style.padding = "10px";
+    hpContainer.style.backgroundColor = "var(--background-secondary)";
+    hpContainer.style.borderRadius = "5px";
+    hpContainer.style.marginBottom = "15px";
+
+    hpContainer.createEl("h4", { text: "Current Health Status" });
+    hpContainer.createEl("p", {
+      text: `❤️ HP: ${health.currentHP} / ${health.maxHP}`,
+    });
+    const effectiveTempHP = this.getEffectiveTempHP();
+    hpContainer.createEl("p", {
+      text: `🛡️ Effective Temporary HP: ${effectiveTempHP}`,
+    });
+    hpContainer.createEl("p", {
+        text: `(Sources: ${health.tempHP || 0} from items/effects, ${health.manualTempHP || 0} from manual grant)`,
+        cls: "setting-item-description" 
+    });
+  }
+  
+  // Modificado para aceitar damageType
+  async applyDamage(damageAmount: number, damageType: string, sourceDescription: string) {
+    if (damageAmount < 0) {
+        new Notice("Damage cannot be negative.");
+        return;
+    }
+
+    const initialDamage = damageAmount;
+    let finalDamage = damageAmount;
+    const defenses = this.plugin.settings.defenses;
+
+    let defenseMessage = "";
+
+    // Aplicar imunidades e resistências apenas se não for 'Typeless'
+    if (damageType !== 'Typeless') {
+        if (defenses.immunities && defenses.immunities[damageType] && defenses.immunities[damageType].length > 0) {
+            finalDamage = 0;
+            defenseMessage = `Immune to ${damageType}!`;
+        } else if (defenses.resistances && defenses.resistances[damageType] && defenses.resistances[damageType].length > 0) {
+            finalDamage = Math.floor(initialDamage / 2);
+            defenseMessage = `Resisted ${damageType}! (${initialDamage} -> ${finalDamage})`;
+        }
+    }
+    
+    new Notice(`${sourceDescription} for ${initialDamage} ${damageType} damage. ${defenseMessage || `Effective: ${finalDamage}`}`);
+    if (finalDamage === 0 && initialDamage > 0 && defenseMessage.includes("Immune")) { // Se imune, não aplica dano
+        this.onOpen(); // Apenas atualiza o modal
+        return;
+    }
+
+
+    const health = this.plugin.settings.health;
+    let remainingDamage = finalDamage; // Usa o dano após resistências/imunidades
+    let effectiveTempHP = this.getEffectiveTempHP();
+
+    if (effectiveTempHP > 0 && remainingDamage > 0) {
+        const damageToTemp = Math.min(remainingDamage, effectiveTempHP);
+        if (health.manualTempHP && health.manualTempHP > 0) {
+            const reduceManualBy = Math.min(damageToTemp, health.manualTempHP);
+            health.manualTempHP -= reduceManualBy;
+        }
+        remainingDamage -= damageToTemp;
+        new Notice(`Dealt ${damageToTemp} to Temporary HP.`);
+    }
+
+    if (remainingDamage > 0) {
+        health.currentHP = Math.max(0, health.currentHP - remainingDamage);
+        new Notice(`Dealt ${remainingDamage} to Current HP.`);
+    }
+    
+    await this.plugin.saveSettings();
+    this.onOpen();
+  }
+
+  parseAndRollDice(diceString: string): number | null { /* ... (como na resposta anterior) ... */
+    diceString = diceString.replace(/\s/g, ''); 
+    const dicePattern = /^(\d*)d(\d+)(?:([+-])(\d+))?$/i; 
+    const match = diceString.match(dicePattern);
+
+    if (!match) {
+        new Notice(`Invalid dice format: ${diceString}. Use e.g., '2d6', 'd20+3', '3d4-1'.`);
+        return null;
+    }
+
+    const numDice = match[1] ? parseInt(match[1]) : 1;
+    const sides = parseInt(match[2]);
+    const operator = match[3]; 
+    const modifierValue = match[4] ? parseInt(match[4]) : 0;
+
+    if (sides < 2) { 
+        new Notice("Dice must have at least 2 sides."); 
+        return null;
+    }
+    if (numDice <=0) {
+        new Notice("Number of dice must be positive.");
+        return null;
+    }
+
+    const roller = new Dice(sides); 
+    let totalRoll = 0;
+    for (let i = 0; i < numDice; i++) {
+        totalRoll += roller.roll(); 
+    }
+
+    if (operator === '+') {
+        totalRoll += modifierValue;
+    } else if (operator === '-') {
+        totalRoll -= modifierValue;
+    }
+    return totalRoll;
+  }
+
+  createDamageSection(container: HTMLElement) {
+    const section = container.createDiv({ cls: "damage-section" });
+    section.createEl("h3", { text: "💥 Deal Damage" });
+    
+    // Damage Type Selector - Comum para ambas as seções de dano
+    const damageTypeSetting = new Setting(section)
+        .setName("Damage Type")
+        .addDropdown(dropdown => {
+            this.plugin.settings.damageTypes.forEach(type => {
+                dropdown.addOption(type, type);
+            });
+            dropdown.setValue(this.selectedDamageType); // Usa o valor armazenado
+            dropdown.onChange(value => {
+                this.selectedDamageType = value; // Atualiza o valor armazenado
+            });
+        });
+
+    // Manual Damage Input
+    section.createEl("h4", { text: "Manual Damage Entry" });
+    let manualDamageAmount = 0;
+    new Setting(section)
+      .setName("Damage Amount")
+      .addText((text) =>
+        text.setPlaceholder("Enter damage").onChange((value) => {
+          manualDamageAmount = parseInt(value) || 0;
+        })
+      )
+      .addButton((button) =>
+        button
+          .setButtonText("Apply Manual Damage")
+          .setCta()
+          .onClick(async () => {
+            if (manualDamageAmount <= 0 && manualDamageAmount !==0) { 
+                new Notice("Please enter a non-negative damage amount.");
+                return;
+            }
+            // Usa this.selectedDamageType que é atualizado pelo dropdown
+            await this.applyDamage(manualDamageAmount, this.selectedDamageType, "Manually applied"); 
+          })
+      );
+    
+    section.createEl("hr");
+
+    // Dice Damage Input
+    section.createEl("h4", { text: "🎲 Roll Dice for Damage" });
+    let diceString = "1d6"; 
+    new Setting(section)
+        .setName("Dice Notation")
+        .setDesc("E.g., 2d6, d20+3, 3d4-1")
+        .addText(text => text
+            .setPlaceholder("e.g., 2d6+3")
+            .setValue(diceString)
+            .onChange(value => {
+                diceString = value;
+            })
+        )
+        .addButton(button => button
+            .setButtonText("Roll & Apply Damage")
+            .onClick(async () => {
+                const rolledDamage = this.parseAndRollDice(diceString);
+                if (rolledDamage === null) return;
+                // Usa this.selectedDamageType que é atualizado pelo dropdown
+                await this.applyDamage(rolledDamage, this.selectedDamageType, `Rolled ${diceString}`); 
+            })
+        );
+  }
+
+  createHealingSection(container: HTMLElement) { /* ... (como na resposta anterior) ... */
+    const section = container.createDiv({ cls: "healing-section" });
+    section.createEl("h3", { text: "💖 Heal HP" });
+
+    let healAmount = 0;
+    new Setting(section)
+      .setName("Heal Amount")
+      .addText((text) =>
+        text.setPlaceholder("Enter healing").onChange((value) => {
+          healAmount = parseInt(value) || 0;
+        })
+      )
+      .addButton((button) =>
+        button
+          .setButtonText("Apply Healing")
+          .setCta()
+          .onClick(async () => {
+            if (healAmount <= 0) {
+              new Notice("Please enter a positive healing amount.");
+              return;
+            }
+            const health = this.plugin.settings.health;
+            health.currentHP = Math.min(health.maxHP, health.currentHP + healAmount);
+            new Notice(`Healed ${healAmount} HP.`);
+            await this.plugin.saveSettings();
+            this.onOpen(); 
+          })
+      );
+  }
+
+  createTempHPSection(container: HTMLElement) { /* ... (como na resposta anterior) ... */
+    const section = container.createDiv({ cls: "temp-hp-section" });
+    section.createEl("h3", { text: "🛡️ Grant Manual Temporary HP" });
+
+    let tempHPAmount = 0;
+    new Setting(section)
+      .setName("Temporary HP Amount")
+      .setDesc("Grants new Manual Temp HP. Effective Temp HP will be the max of this and item/effect-based Temp HP.")
+      .addText((text) =>
+        text.setPlaceholder("Enter Temp HP").onChange((value) => {
+          tempHPAmount = parseInt(value) || 0; 
+        })
+      )
+      .addButton((button) =>
+        button
+          .setButtonText("Grant Manual Temp HP")
+          .setCta()
+          .onClick(async () => {
+            if (tempHPAmount < 0) {
+              new Notice("Please enter a non-negative Temp HP amount.");
+              return;
+            }
+            const health = this.plugin.settings.health;
+            health.manualTempHP = tempHPAmount; 
+            
+            new Notice(`Granted ${tempHPAmount} Manual Temporary HP.`);
+            await this.plugin.saveSettings();
+            this.onOpen(); 
+          })
+      );
+  }
+
+  // Modificado para lista de efeitos recolhível por pasta
+  createApplyEffectsSection(contentEl: HTMLElement) {
+    contentEl.createEl("hr");
+    contentEl.createEl("h3", { text: "✨ Apply New Effect" });
+
+    const activeEffectPaths = Object.values(this.plugin.settings.effects)
+                                   .filter(e => e.active && !this.plugin.isEffectExpired(e))
+                                   .map(e => e.notePath);
+
+    // === Unique Effects ===
+    contentEl.createEl("h4", { text: "Available Unique Effects (by Folder)" });
+    if (this.plugin.settings.effectFolders.length === 0) {
+        contentEl.createEl("p", {text: "No unique effect folders configured in settings."});
+    }
+    this.plugin.settings.effectFolders.forEach(folderPath => {
+        const folderDetails = contentEl.createEl("details");
+        folderDetails.createEl("summary", { text: folderPath });
+        const effectsInFolder = this.getEffectsFromSpecificFolder(folderPath, activeEffectPaths, false);
+        if (effectsInFolder.length === 0) {
+            folderDetails.createEl("p", { text: "No new unique effects available in this folder." });
+        } else {
+            effectsInFolder.forEach(effect => {
+                this.renderEffectEntry(folderDetails, effect.path, false);
+            });
+        }
+    });
+    
+    // === Repeatable Effects ===
+    contentEl.createEl("h4", { text: "Available Repeatable Effects (by Folder)" });
+     if (this.plugin.settings.repeatableEffectFolders.length === 0) {
+        contentEl.createEl("p", {text: "No repeatable effect folders configured in settings."});
+    }
+    this.plugin.settings.repeatableEffectFolders.forEach(folderPath => {
+        const folderDetails = contentEl.createEl("details");
+        folderDetails.createEl("summary", { text: folderPath });
+        // Para repetíveis, não filtramos por activeEffectPaths pois podem ser adicionados múltiplos
+        const effectsInFolder = this.getEffectsFromSpecificFolder(folderPath, [], true); 
+        if (effectsInFolder.length === 0) {
+            folderDetails.createEl("p", { text: "No repeatable effects available in this folder." });
+        } else {
+            effectsInFolder.forEach(effect => {
+                this.renderEffectEntry(folderDetails, effect.path, true);
+            });
+        }
+    });
+  }
+  
+  // Novo helper para pegar efeitos de uma pasta específica
+  getEffectsFromSpecificFolder(folderPath: string, activeEffectPaths: string[], isRepeatable: boolean): TFile[] {
+      const folder = this.app.vault.getAbstractFileByPath(folderPath);
+      const availableEffects: TFile[] = [];
+      if (folder instanceof TFolder) {
+          for (const file of folder.children) {
+              if (file instanceof TFile && file.extension === "md") {
+                  if (isRepeatable || !activeEffectPaths.includes(file.path)) {
+                      availableEffects.push(file);
+                  }
+              }
+          }
+      }
+      return availableEffects;
+  }
+// How to integrate it:
+// You can add a button to your HPManagementModal to open this new DamageModal.
+// Find the `onOpen()` method of `HPManagementModal` and add this towards the end:
+
+/*
+// In HPManagementModal class, inside onOpen() method:
+
+    // ... (existing HPManagementModal content) ...
+
+    contentEl.createEl("hr"); // Optional separator
+
+    const damageButton = contentEl.createEl("button", { 
+        text: "⚔️ Damage / Heal / Effects", 
+        cls: "mod-cta" 
+    });
+    damageButton.style.marginTop = "10px"; // Add some spacing
+    damageButton.onclick = () => {
+      this.close(); // Close HPManagementModal
+      new DamageModal(this.app, this.plugin).open(); // Open the new DamageModal
+    };
+
+    // ... (rest of HPManagementModal onOpen like "Curar totalmente" button)
+*/
+ renderEffectEntry(parentElement: HTMLElement, path: string, _isRepeatable: boolean) { /* ... (como na resposta anterior, apenas garanta que parentElement é usado em vez de contentEl diretamente para criar a entrada do efeito) ... */
+    const container = parentElement.createDiv({ cls: "effect-entry" });
+    container.style.marginBottom = "10px";
+    container.style.padding = "10px";
+    container.style.border = "1px solid var(--background-modifier-border)";
+    container.style.borderRadius = "5px";
+
+    const header = container.createDiv({ cls: "effect-header" });
+    header.style.display = "flex";
+    header.style.justifyContent = "space-between";
+    header.style.alignItems = "center";
+
+    header.createEl("b", { text: path });
+    const toggleBtn = header.createEl("button", { text: "➕ Add Effect" });
+    const configDiv = container.createDiv();
+    configDiv.style.display = "none"; 
+
+    toggleBtn.onclick = () => {
+      const opened = configDiv.style.display === "block";
+      configDiv.style.display = opened ? "none" : "block";
+      toggleBtn.setText(opened ? "➕ Add Effect" : "✖ Cancel");
+    };
+
+    let duration = 7; 
+    let permanent = false;
+
+    new Setting(configDiv)
+      .setName("Duration (days)")
+      .setDesc("Set to 0 or leave empty for non-expiring if not permanent.")
+      .addText(text => {
+        text.setPlaceholder("Ex: 7")
+          .setValue(String(duration))
+          .onChange(value => {
+            const parsed = parseInt(value);
+            duration = !isNaN(parsed) && parsed >= 0 ? parsed : 0;
+          });
+      });
+
+    new Setting(configDiv)
+      .setName("Permanent Effect")
+      .addToggle(toggle => {
+        toggle.setValue(permanent).onChange(value => {
+          permanent = value;
+        });
+      });
+
+    new Setting(configDiv)
+      .addButton(button => {
+        button.setButtonText("Confirm & Apply Effect")
+          .setCta()
+          .onClick(async () => {
+            const id = `eff_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+            this.plugin.settings.effects[id] = { 
+              notePath: path,
+              startDate: new Date().toISOString(), 
+              durationDays: permanent ? undefined : (duration > 0 ? duration : undefined), 
+              permanent, 
+              active: true 
+            };
+            
+            const effectFile = this.app.vault.getAbstractFileByPath(path);
+            if (effectFile) {
+                 this.app.metadataCache.trigger("changed", effectFile);
+            }
+            await this.plugin.applyAllPassiveEffects(); 
+            await this.plugin.saveSettings();
+            
+            new Notice(`Effect "${path}" applied.`);
+            this.onOpen(); 
+          });
+      });
+  }
+
+  onClose() { /* ... (como na resposta anterior) ... */
+    this.contentEl.empty();
+  }
+}
+
+class DefensesModal extends Modal {
+  plugin: RPGLevelsPlugin;
+
+  constructor(app: App, plugin: RPGLevelsPlugin) {
+    super(app);
+    this.plugin = plugin;
+  }
+
+  async onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    // Garante que as defesas estão atualizadas antes de exibir
+    await this.plugin.applyAllPassiveEffects(); 
+
+    contentEl.createEl("h2", { text: "🛡️ Character Defenses" });
+
+    const defenses = this.plugin.settings.defenses;
+
+    // === Display Resistances ===
+    contentEl.createEl("h3", { text: "Resistances" });
+    const resistancesContainer = contentEl.createDiv();
+    if (!defenses || Object.keys(defenses.resistances || {}).length === 0) {
+        resistancesContainer.createEl("p", { text: "No active resistances." });
+    } else {
+        const ul = resistancesContainer.createEl("ul");
+        for (const [type, sources] of Object.entries(defenses.resistances)) {
+            if (sources && sources.length > 0) {
+                const li = ul.createEl("li");
+                li.createEl("strong", { text: `${type}: ` });
+                // Extrai o nome do arquivo do path para melhor legibilidade
+                const sourceNames = sources.map(path => path.substring(path.lastIndexOf('/') + 1).replace(/\.md$/, ''));
+                li.appendText(` (Sources: ${sourceNames.join(", ")})`);
+            }
+        }
+    }
+
+    // === Display Immunities ===
+    contentEl.createEl("h3", { text: "Immunities" });
+    const immunitiesContainer = contentEl.createDiv();
+    if (!defenses || Object.keys(defenses.immunities || {}).length === 0) {
+        immunitiesContainer.createEl("p", { text: "No active immunities." });
+    } else {
+        const ul = immunitiesContainer.createEl("ul");
+        for (const [type, sources] of Object.entries(defenses.immunities)) {
+             if (sources && sources.length > 0) {
+                const li = ul.createEl("li");
+                li.createEl("strong", { text: `${type}: ` });
+                const sourceNames = sources.map(path => path.substring(path.lastIndexOf('/') + 1).replace(/\.md$/, ''));
+                li.appendText(` (Sources: ${sourceNames.join(", ")})`);
+            }
+        }
+    }
+     // Botão para fechar
+    new Setting(contentEl)
+        .addButton(btn => btn
+            .setButtonText("Close")
+            .setCta()
+            .onClick(() => {
+                this.close();
+            }));
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+// [[ NO SEU ARQUIVO 10.txt, SUBSTITUA A CLASSE AbilitiesModal EXISTENTE POR ESTA ]]
+
+class AbilitiesModal extends Modal {
+    plugin: RPGLevelsPlugin;
+
+    constructor(app: App, plugin: RPGLevelsPlugin) { //
+        super(app); //
+        this.plugin = plugin; //
+    }
+
+    async onOpen() { //
+        const { contentEl } = this; //
+        contentEl.empty(); //
+        await this.plugin.applyAllPassiveEffects(); // Garante que proficiências de skill estejam atualizadas
+
+        contentEl.createEl("h2", { text: "💪 Character Abilities, Saves & Skills" }); //
+
+        const stats = this.plugin.settings.characterStats; //
+        const saveProficiencies = this.plugin.settings.proficiencies; // Para saves
+        const skillProficienciesData = this.plugin.settings.skillProficiencies; // Para skills
+        const proficiencyBonus = this.plugin.settings.proficiencyBonus; //
+        
+        // Carrega as definições de skill dinamicamente
+        const loadedSkills = await this.plugin.loadSkillDefinitions(); //
+
+        contentEl.createEl("p", {text: `Current Proficiency Bonus: +${proficiencyBonus}`}); //
+        contentEl.createEl("hr"); //
+
+        const abilityOrder: (keyof CharacterStats)[] = ["Strength", "Dexterity", "Constitution", "Intelligence", "Wisdom", "Charisma"]; //
+
+        contentEl.createEl("h3", { text: "Abilities & Saving Throws" }); //
+        abilityOrder.forEach(statName => { //
+            const statValue = stats[statName]; //
+            const modifier = this.plugin.getAbilityModifier(statValue); //
+            const modifierString = modifier >= 0 ? `+${modifier}` : `${modifier}`; //
+            const saveProficiencyKey = `${statName.toLowerCase()}Save` as keyof typeof saveProficiencies; //
+
+            const statDiv = contentEl.createDiv({ cls: "ability-entry" }); //
+            statDiv.style.marginBottom = "15px"; //
+            statDiv.style.padding = "10px"; //
+            statDiv.style.border = "1px solid var(--background-modifier-border)"; //
+            statDiv.style.borderRadius = "5px"; //
+
+            statDiv.createEl("h4", { text: `${statName}: ${statValue} (${modifierString})` }); //
+
+            new Setting(statDiv) //
+                .setName(`${statName} Saving Throw Proficiency`) //
+                .addToggle(toggle => toggle //
+                    .setValue(saveProficiencies[saveProficiencyKey]) //
+                    .onChange(async (value: boolean) => {
+                  
+                    (saveProficiencies as Record<string, boolean>)[saveProficiencyKey] = value;
+                        await this.plugin.saveSettings(); //
+                        new Notice(`${statName} Save Proficiency ${value ? 'Enabled' : 'Disabled'}.`); //
+                        this.onOpen(); // Re-render para atualizar descrições de botões de rolagem
+                    }));
+
+            new Setting(statDiv) //
+                .setName(`Roll ${statName} Check/Save`) //
+                .setDesc(`1d20 + ${modifier}${saveProficiencies[saveProficiencyKey] ? ` + ${proficiencyBonus} (prof)` : ''}`) //
+                .addButton(button => button //
+                    .setButtonText("🎲 Roll") //
+                    .setCta() //
+                    .onClick(() => { //
+                        const d20Roll = new Dice(20).roll(); //
+                        let totalRoll = d20Roll + modifier; //
+                        let rollExplanation = `Rolled ${d20Roll} (d20) + ${modifier} (mod)`; //
+
+                        if (saveProficiencies[saveProficiencyKey]) { //
+                            totalRoll += proficiencyBonus; //
+                            rollExplanation += ` + ${proficiencyBonus} (prof)`; //
+                        }
+                        rollExplanation += ` = ${totalRoll}`; //
+                        new Notice(`${statName} Roll: ${totalRoll}\n(${rollExplanation})`, 10000); //
+                    }));
+        });
+
+        contentEl.createEl("hr"); //
+        contentEl.createEl("h3", { text: "Skills" }); //
+
+        if (!this.plugin.settings.skillFolders || this.plugin.settings.skillFolders.length === 0) {
+            contentEl.createEl("p", { text: "No skill folders configured in settings. Please add skill folders in the plugin settings and create skill notes there." });
+        } else if (loadedSkills.length === 0) {
+            contentEl.createEl("p", { text: `No skill notes found in the configured folder(s): ${this.plugin.settings.skillFolders.join(', ')}. Ensure notes have 'baseAbility' in their frontmatter.` });
+        } else {
+            loadedSkills.forEach(skillDef => {
+                const skillId = skillDef.id; // Nome do arquivo sem .md
+                const skillDisplayName = skillDef.displayName;
+                const baseAbilityScore = stats[skillDef.baseAbility];
+                const abilityModifier = this.plugin.getAbilityModifier(baseAbilityScore);
+                
+                const skillProfData = skillProficienciesData[skillId] || { level: "none", sources: [] };
+                let skillBonus = abilityModifier;
+                let proficiencyDisplay = "None";
+                let sourcesDisplay = "";
+                if (skillProfData.sources && skillProfData.sources.length > 0) { // Adicionado para verificar se sources existe
+                    sourcesDisplay = ` (Sources: ${skillProfData.sources.map(s => s.substring(s.lastIndexOf('/') + 1).replace(/\.md$/, '')).join(', ')})`;
+                }
+
+
+                if (skillProfData.level === "proficient") {
+                    skillBonus += proficiencyBonus;
+                    proficiencyDisplay = `Proficient (+${proficiencyBonus})`;
+                } else if (skillProfData.level === "expert") {
+                    skillBonus += (proficiencyBonus * 2);
+                    proficiencyDisplay = `Expert (+${proficiencyBonus * 2})`;
+                }
+
+                const skillBonusString = skillBonus >= 0 ? `+${skillBonus}` : `${skillBonus}`;
+
+                const skillDiv = contentEl.createDiv({ cls: "skill-entry" });
+                skillDiv.style.paddingBlockStart = "8px"; //
+
+                new Setting(skillDiv)
+                    .setName(`${skillDisplayName} (${skillDef.baseAbility.substring(0,3)}): ${skillBonusString}`)
+                    .setDesc(`Status: ${proficiencyDisplay}${sourcesDisplay}`)
+                    .addButton(button => button
+                        .setButtonText("🎲 Roll")
+                        .onClick(() => {
+                            const d20Roll = new Dice(20).roll();
+                            const totalRoll = d20Roll + skillBonus;
+                            const rollExplanation = `Rolled ${d20Roll} (d20) ${skillBonusString} (bonus) = ${totalRoll}`;
+                            new Notice(`${skillDisplayName} Check: ${totalRoll}\n(${rollExplanation})`, 10000);
+                        }));
+            });
+        }
+        
+        new Setting(contentEl) //
+        .addButton(btn => btn //
+            .setButtonText("Close") //
+            .onClick(() => { //
+                this.close(); //
+            }));
+    }
+
+    onClose() { //
+        this.contentEl.empty(); //
+    }
+}
 
 
 class QuestModal extends Modal {
@@ -1827,141 +2744,158 @@ class QuestModal extends Modal {
 
 class FeatsModal extends Modal {
 	plugin: RPGLevelsPlugin;
+    private allFeatsFromFoldersCache: string[]; // Cache para evitar recálculo
+    private availableFeatsContainer: HTMLElement; 
+    private searchInputEl: HTMLInputElement; // Referência ao elemento input
 
 	constructor(app: App, plugin: RPGLevelsPlugin) {
-		super(app);
-		this.plugin = plugin;
+		super(app); // [cite: 297]
+		this.plugin = plugin; // [cite: 297]
+        this.allFeatsFromFoldersCache = []; 
 	}
 
 	onOpen() {
-  const { contentEl } = this;
+        const { contentEl } = this; // [cite: 297]
+        contentEl.empty(); 
 
-  // === Feats obtidos ===
-  const obtainedFeats: string[] = this.plugin.settings.obtainedFeats ?? [];
-  const allFeats = this.plugin.getAvailableFeatsFromFolders();
-  const repeatableFeats: string[] = []; // ou remova o bloco de feats repetíveis completamente
-  const alreadyObtained = new Set(obtainedFeats);
+        // Carrega todos os talentos das pastas uma vez ao abrir o modal
+        this.allFeatsFromFoldersCache = this.plugin.getAvailableFeatsFromFolders(); // [cite: 298]
 
-  contentEl.createEl("h2", { text: "Manage Feats" });
-
-  contentEl.createEl("h3", { text: "Obtained Feats" });
-  if (obtainedFeats.length === 0) {
-    contentEl.createEl("p", { text: "No feats yet." });
-  } else {
-    obtainedFeats.forEach(async (feat: string) => {
-      const container = contentEl.createDiv();
-      await MarkdownRenderer.renderMarkdown(`[[${feat}]]`, container, '', this.plugin);
-      const linkEl = container.querySelector("a.internal-link");
-      if (linkEl) {
-        linkEl.addEventListener("click", (e) => {
-          e.preventDefault();
-          this.app.workspace.openLinkText(feat, '', false);
+        contentEl.createEl("h2", { text: "Manage Feats" }); // [cite: 300]
+        
+        // === Feats obtidos ===
+        contentEl.createEl("h3", { text: "Obtained Feats" }); // [cite: 300]
+        const obtainedFeats: string[] = this.plugin.settings.obtainedFeats ?? []; // [cite: 298]
+        const obtainedFeatsContainer = contentEl.createDiv();
+        if (obtainedFeats.length === 0) { // [cite: 301]
+            obtainedFeatsContainer.createEl("p", { text: "No feats yet." }); // [cite: 301]
+        } else {
+            obtainedFeats.forEach(async (feat: string) => { // [cite: 302]
+                const featItemContainer = obtainedFeatsContainer.createDiv({cls: 'feat-item-obtained'});
+                await MarkdownRenderer.renderMarkdown(`[[${feat}]]`, featItemContainer, feat, this.plugin); // [cite: 302]
+                const linkEl = featItemContainer.querySelector("a.internal-link"); // [cite: 302]
+                if (linkEl) { // [cite: 302]
+                    linkEl.addEventListener("click", (e) => { // [cite: 302]
+                        e.preventDefault(); // [cite: 302]
+                        this.app.workspace.openLinkText(feat, '', false); // [cite: 302]
+                    });
+                }
+            });
+        }
+        
+        const removeFeatBtn = contentEl.createEl("button", { // [cite: 303]
+            text: "🗑️ Remover Feat Obtido", // [cite: 303]
+            cls: "mod-cta" // [cite: 303]
         });
-      }
-    });
-  }
-  
-  const removeFeatBtn = contentEl.createEl("button", {
-  text: "🗑️ Remover Feat Obtido",
-  cls: "mod-cta"
-});
-
-removeFeatBtn.onclick = () => {
-  const feats = this.plugin.settings.obtainedFeats;
-
-  if (feats.length === 0) {
-    new Notice("Você não tem feats para remover.");
-    return;
-  }
-
-  new class extends FuzzySuggestModal<string> {
-    plugin: RPGLevelsPlugin;
-    parentModal: Modal;
-
-    constructor(app: App, plugin: RPGLevelsPlugin, parentModal: Modal) {
-      super(app);
-      this.plugin = plugin;
-      this.parentModal = parentModal;
-    }
-
-    getItems(): string[] {
-      return this.plugin.settings.obtainedFeats;
-    }
-
-    getItemText(item: string): string {
-      return item;
-    }
-
-    async onChooseItem(item: string) {
-      this.plugin.settings.obtainedFeats = this.plugin.settings.obtainedFeats.filter(f => f !== item);
-      await this.plugin.applyAllPassiveEffects();
-      await this.plugin.saveSettings();
-      new Notice(`Feat removido: ${item}`);
-      this.parentModal.close();
-      new FeatsModal(this.app, this.plugin).open();
-    }
-  }(this.app, this.plugin, this).open();
- };
-
-
-  // === Feats únicos ===
-  const uniqueAvailable = allFeats.filter(f => !alreadyObtained.has(f));
-
-  // === Seção de feats disponíveis ===
-  contentEl.createEl("h3", { text: "Available Feats" });
-
-  if (uniqueAvailable.length === 0 && repeatableFeats.length === 0) {
-    contentEl.createEl("p", { text: "No feats available." });
-  } else {
-    // 🟩 Feats únicos
-    if (uniqueAvailable.length > 0) {
-      contentEl.createEl("h4", { text: "Unique Feats" });
-      uniqueAvailable.forEach((feat: string) => {
-        const row = contentEl.createDiv({ cls: "feat-row" });
-        row.createEl("span", { text: feat });
-
-        const pickBtn = row.createEl("button", { text: "Pick Feat" });
-        pickBtn.onclick = async () => {
-          if ((this.plugin.settings.featPoints ?? 0) <= 0) {
-            new Notice("Você não tem pontos de feat suficientes.");
-            return;
-          }
-          this.plugin.settings.obtainedFeats.push(feat);
-          this.plugin.settings.featPoints!--;
-          await this.plugin.saveSettings();
-          this.close();
-          new FeatsModal(this.app, this.plugin).open();
+        removeFeatBtn.onclick = () => { // [cite: 304]
+            const feats = this.plugin.settings.obtainedFeats; // [cite: 304]
+            if (!feats || feats.length === 0) { // Modificado para checar !feats também // [cite: 305]
+                new Notice("Você não tem feats para remover."); // [cite: 305]
+                return; // [cite: 305]
+            }
+            // A sub-classe FuzzySuggestModal para remover feats parece correta
+            new class extends FuzzySuggestModal<string> { // [cite: 306]
+                plugin: RPGLevelsPlugin; // [cite: 306]
+                parentModal: Modal; // [cite: 306]
+                constructor(app: App, plugin: RPGLevelsPlugin, parentModal: Modal) { // [cite: 307]
+                  super(app); // [cite: 307]
+                  this.plugin = plugin; // [cite: 307]
+                  this.parentModal = parentModal; // [cite: 307]
+                }
+                getItems(): string[] { return this.plugin.settings.obtainedFeats; } // [cite: 308]
+                getItemText(item: string): string { return item; } // [cite: 309]
+                async onChooseItem(item: string) { // [cite: 310]
+                  this.plugin.settings.obtainedFeats = this.plugin.settings.obtainedFeats.filter(f => f !== item); // [cite: 310]
+                  await this.plugin.applyAllPassiveEffects(); // [cite: 311]
+                  await this.plugin.saveSettings(); // [cite: 311]
+                  new Notice(`Feat removido: ${item}`); // [cite: 311]
+                  this.parentModal.close(); // [cite: 311]
+                  new FeatsModal(this.app, this.plugin).open(); // [cite: 311]
+                }
+            }(this.app, this.plugin, this).open();
         };
-      });
-    }
+        contentEl.createEl("hr");
 
-    // ♻️ Efeitos repetíveis
-    if (repeatableFeats.length > 0) {
-      contentEl.createEl("h4", { text: "Repeatable Effects" });
-      repeatableFeats.forEach((feat: string) => {
-        const row = contentEl.createDiv({ cls: "feat-row" });
-        row.createEl("span", { text: feat });
+        // === Seção de feats disponíveis com pesquisa ===
+        contentEl.createEl("h3", { text: "Available Feats" }); // [cite: 313]
 
-        const pickBtn = row.createEl("button", { text: "Pick Feat" });
-        pickBtn.onclick = async () => {
-          if ((this.plugin.settings.featPoints ?? 0) <= 0) {
-            new Notice("Você não tem pontos de feat suficientes.");
-            return;
-          }
-          this.plugin.settings.obtainedFeats.push(feat); // permite duplicados
-          this.plugin.settings.featPoints!--;
-		  await this.plugin.applyAllPassiveEffects();
-          await this.plugin.saveSettings();
-          this.close();
-          new FeatsModal(this.app, this.plugin).open();
-        };
-      });
+        this.searchInputEl = contentEl.createEl("input", {
+            type: "text",
+            placeholder: "Search available feats by name/path..."
+        });
+        this.searchInputEl.style.width = "100%";
+        this.searchInputEl.style.marginBottom = "10px";
+        
+        // Adiciona o event listener ao elemento input
+        this.searchInputEl.addEventListener("input", (event) => {
+            const searchTerm = (event.target as HTMLInputElement).value;
+            this.renderAvailableFeatsList(searchTerm);
+        });
+
+        this.availableFeatsContainer = contentEl.createDiv(); // Cria o container uma vez
+        this.renderAvailableFeatsList(""); // Renderiza a lista inicial (todos os talentos)
+	}
+
+    renderAvailableFeatsList(searchTerm: string) {
+        this.availableFeatsContainer.empty(); // Limpa apenas o container da lista
+        const lowerSearchTerm = searchTerm.toLowerCase();
+
+        const obtainedSet = new Set(this.plugin.settings.obtainedFeats ?? []);
+        
+        const filteredAndAvailableFeats = this.allFeatsFromFoldersCache.filter(featPath => {
+            const isNotObtained = !obtainedSet.has(featPath);
+            const matchesSearch = featPath.toLowerCase().includes(lowerSearchTerm);
+            return isNotObtained && matchesSearch;
+        });
+
+        // Seu código original não distinguia entre "unique" e "repeatable" para feats,
+        // então vamos listar todos os que passam pelo filtro.
+        // A lógica de "repeatableFeats" estava vazia [cite: 298]
+
+        if (filteredAndAvailableFeats.length === 0) { // [cite: 314]
+            this.availableFeatsContainer.createEl("p", { text: "No feats available matching your criteria or all taken." }); // Parcialmente de [cite: 314]
+        } else {
+            filteredAndAvailableFeats.forEach((feat: string) => { // [cite: 316]
+                const row = this.availableFeatsContainer.createDiv({ cls: "feat-row" }); // [cite: 316]
+                // Estilização da linha
+                row.style.display = "flex";
+                row.style.justifyContent = "space-between";
+                row.style.alignItems = "center";
+                row.style.marginBottom = "8px";
+                row.style.padding = "5px";
+                row.style.border = "1px solid var(--background-modifier-border)";
+                row.style.borderRadius = "4px";
+
+                // Nome/Link do Feat (Clicável para abrir a nota)
+                const featNameDiv = row.createDiv({cls: 'feat-name-link'});
+                featNameDiv.style.flexGrow = "1";
+                MarkdownRenderer.renderMarkdown(`[[${feat}]]`, featNameDiv, feat, this.plugin);
+                const linkInName = featNameDiv.querySelector('a.internal-link');
+                if(linkInName){
+                    linkInName.addEventListener('click', (ev) => {
+                        ev.preventDefault();
+                        this.app.workspace.openLinkText(feat, '', false);
+                    });
+                }
+                
+                const pickBtn = row.createEl("button", { text: "Pick Feat" }); // [cite: 316]
+                pickBtn.onclick = async () => { // [cite: 316]
+                    if ((this.plugin.settings.featPoints ?? 0) <= 0) { // [cite: 316]
+                        new Notice("Você não tem pontos de feat suficientes."); // [cite: 316]
+                        return; // [cite: 317]
+                    }
+                    this.plugin.settings.obtainedFeats.push(feat); // [cite: 317]
+                    this.plugin.settings.featPoints!--; // [cite: 317]
+                    await this.plugin.applyAllPassiveEffects(); // Garante que bônus do talento sejam aplicados [cite: 320]
+                    await this.plugin.saveSettings(); // [cite: 317]
+                    this.onOpen(); // Recarrega o modal para atualizar as listas e contagem de pontos
+                };
+            });
+        }
     }
-  }
-}
 
 	onClose() {
-		this.contentEl.empty();
+		this.contentEl.empty(); // [cite: 321]
 	}
 }
 
@@ -2561,6 +3495,17 @@ new Setting(containerEl)
     });
   });
 
+  new Setting(containerEl)
+    .setName("Skill Folders")
+    .setDesc("Pastas contendo as notas que definem as skills (perícias). Uma skill por nota. Separe múltiplos caminhos por vírgula.")
+    .addTextArea(text => text
+        .setPlaceholder("Ex: Skills RPG/Combat, Skills RPG/Social")
+        .setValue(this.plugin.settings.skillFolders.join(", "))
+        .onChange(async (value) => {
+            this.plugin.settings.skillFolders = value.split(",").map(f => f.trim()).filter(f => f.length > 0);
+            await this.plugin.saveSettings();
+            await this.plugin.applyAllPassiveEffects(); // Para recarregar skills e suas proficiências
+        }));
 
 
 

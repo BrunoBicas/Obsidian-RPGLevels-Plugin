@@ -1,80 +1,100 @@
-// damage.ts
-import RPGLevelsPlugin from './main';
-import { Dice } from "./dice"; // se já existir suporte
+// DamageModal.ts
+import { App, Modal, Notice } from "obsidian";
+import RPGLevelsPlugin from "./main"; 
 
-export interface DamageResult {
-  amount: number;
-  absorbed: number;
-  remaining: number;
-}
 
-export interface HealingResult {
-  amount: number;
-  healed: number;
-}
 
-export function applyDamage(plugin: RPGLevelsPlugin, amount: number): DamageResult {
-  const health = plugin.settings.health;
-  let remaining = amount;
-  let absorbed = 0;
+export class DamageModal extends Modal {
+  plugin: RPGLevelsPlugin;
 
-  // Usar tempHP primeiro
-  if (health.tempHP > 0) {
-    const used = Math.min(health.tempHP, remaining);
-    health.tempHP -= used;
-    remaining -= used;
-    absorbed = used;
+  constructor(app: App, plugin: RPGLevelsPlugin) {
+    super(app);
+    this.plugin = plugin;
   }
 
-  // Depois tirar de currentHP
-  health.currentHP = Math.max(0, health.currentHP - remaining);
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
 
-  const result: DamageResult = {
-    amount,
-    absorbed,
-    remaining: amount - absorbed - (health.currentHP < remaining ? remaining - health.currentHP : 0)
-  };
+    contentEl.createEl("h2", { text: "⚔️ Aplicar Dano / Cura" });
 
-  recordDamageEvent(plugin, {
-    type: "dano",
-    date: new Date().toISOString().split("T")[0],
-    amount,
-    absorbed
-  });
+    const health = this.plugin.settings.health;
+    const status = contentEl.createEl("p", {
+      text: `❤️ HP Atual: ${health.currentHP}/${health.maxHP} | 🧪 Temp HP: ${health.tempHP}`
+    });
 
-  plugin.saveSettings();
-  return result;
-}
+    const input = contentEl.createEl("input", { type: "text", placeholder: "Ex: 2d6+3 ou 10" });
 
-export function applyHealing(plugin: RPGLevelsPlugin, amount: number): HealingResult {
-  const health = plugin.settings.health;
-  const healed = Math.min(amount, health.maxHP - health.currentHP);
-  health.currentHP += healed;
+    const buttonRow = contentEl.createDiv({ cls: "button-row" });
+    const applyButton = buttonRow.createEl("button", { text: "⚔️ Causar Dano" });
+    const healButton = buttonRow.createEl("button", { text: "💊 Curar" });
+    const fullHealButton = buttonRow.createEl("button", { text: "🔁 Curar totalmente" });
 
-  recordDamageEvent(plugin, {
-    type: "cura",
-    date: new Date().toISOString().split("T")[0],
-    amount,
-    healed
-  });
+    const effectSection = contentEl.createEl("div", { cls: "effect-section" });
+    effectSection.createEl("h3", { text: "✨ Aplicar Efeito" });
 
-  plugin.saveSettings();
-  return {
-    amount,
-    healed
-  };
-}
+    const effectInput = effectSection.createEl("textarea", {
+      placeholder: "JSON do efeito temporário ou permanente"
+    });
 
-export function recordDamageEvent(
-  plugin: RPGLevelsPlugin,
-  entry: {
-    type: "dano" | "cura";
-    date: string;
-    amount: number;
-    absorbed?: number;
-    healed?: number;
+    const applyEffectButton = effectSection.createEl("button", { text: "✨ Aplicar Efeito" });
+
+
+    fullHealButton.onclick = async () => {
+      const healed = this.plugin.settings.health.maxHP - this.plugin.settings.health.currentHP;
+      this.plugin.settings.health.currentHP = this.plugin.settings.health.maxHP;
+      await this.plugin.saveSettings();
+      new Notice(`Curado totalmente (${healed} HP).`);
+      this.close();
+    };
+
+    applyEffectButton.onclick = async () => {
+      try {
+        const effect = JSON.parse(effectInput.value);
+
+        if (!effect.notePath || typeof effect.notePath !== "string") {
+          throw new Error("Efeito precisa de um 'notePath'.");
+        }
+
+        const id = Date.now().toString();
+        this.plugin.settings.effects[id] = {
+          active: true,
+          ...effect,
+        };
+        await this.plugin.saveSettings();
+        new Notice("✨ Efeito aplicado com sucesso.");
+        this.close();
+      } catch (e) {
+        new Notice("Erro ao aplicar efeito: " + e.message);
+      }
+    };
   }
-) {
-  const log = plugin.settings.damageLog ??= { dano: [], cura: [] };
-  log[entry.type].push(entry);
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+// Para uso externo (por comandos ou plugins)
+export function openDamageModal(app: App, plugin: RPGLevelsPlugin) {
+  new DamageModal(app, plugin).open();
+}
+
+// Comando para registrar no plugin
+export function registerDamageCommand(plugin: RPGLevelsPlugin) {
+  plugin.addCommand({
+    id: "abrir-dano",
+    name: "Abrir Gerenciador de Dano",
+    callback: () => openDamageModal(plugin.app, plugin)
+  });
+}
+
+// Utilitário para botão embutido
+export function createDamageButton(container: HTMLElement, plugin: RPGLevelsPlugin) {
+  container.createEl("button", {
+    text: "⚔️ Dano & Cura",
+    cls: "damage-button"
+  }).onclick = () => {
+    openDamageModal(plugin.app, plugin);
+  };
 }

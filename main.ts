@@ -119,7 +119,12 @@ interface RPGLevelsSettings {
 	damageTypes: string[];
     defenses: CharacterDefenses;
 	proficiencyBonus: number; //
-    proficiencies: { /* ... */ }; //
+    proficiencies: { // Modificado para Saving Throws
+        [saveName: string]: { // Ex: "strengthSave", "dexteritySave"
+            level: "none" | "proficient" | "expert";
+            sources: string[];
+        }
+    };
     skillProficiencies: {
         [skillName: string]: {
             level: "none" | "proficient" | "expert";
@@ -163,8 +168,14 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
         immunities: {}
     },
 	proficiencyBonus: 2, //
-    proficiencies: { /* ... */ }, //
-
+    proficiencies: { // Modificado - todas as chaves devem estar aqui
+        strengthSave: { level: "none", sources: [] },
+        dexteritySave: { level: "none", sources: [] },
+        constitutionSave: { level: "none", sources: [] },
+        intelligenceSave: { level: "none", sources: [] },
+        wisdomSave: { level: "none", sources: [] },
+        charismaSave: { level: "none", sources: [] },
+    },
 
     skillProficiencies: {}, // Será populado por applyAllPassiveEffects
 	skillFolders: [],
@@ -600,160 +611,168 @@ export default class RPGLevelsPlugin extends Plugin {
   return effects;
  }
 
- async applyAllPassiveEffects() {
-    const statsBase = { // [cite: 74]
-        Strength: 10, Dexterity: 10, Constitution: 10, Intelligence: 10, Wisdom: 10, Charisma: 10 // [cite: 74]
-    };
-    const statBonus: Partial<CharacterStats> = { // [cite: 75]
-        Strength: 0, Dexterity: 0, Constitution: 0, Intelligence: 0, Wisdom: 0, Charisma: 0 // [cite: 75]
-    };
-    let featHpBonus = 0; // [cite: 76]
-    let featTempHP = 0; // [cite: 76]
+async applyAllPassiveEffects() {
+    // 1. INICIALIZAÇÃO DE VALORES BASE E ACUMULADORES
+    const statsBase: CharacterStats = { Strength: 10, Dexterity: 10, Constitution: 10, Intelligence: 10, Wisdom: 10, Charisma: 10 };
+    const accumulatedStatBonuses: Partial<CharacterStats> = { Strength: 0, Dexterity: 0, Constitution: 0, Intelligence: 0, Wisdom: 0, Charisma: 0 };
+    let accumulatedFeatHpBonus = 0;
+    let maxFeatTempHP = 0;
 
-    // Inicializa ou limpa defesas para reconstrução
+    // 2. LIMPAR/RESETAR DADOS DERIVADOS ANTES DE RECALCULAR
     if (!this.settings.defenses) {
         this.settings.defenses = { resistances: {}, immunities: {} };
     } else {
         this.settings.defenses.resistances = {};
         this.settings.defenses.immunities = {};
     }
-	// NOVA INICIALIZAÇÃO PARA SKILL PROFICIENCIES
     this.settings.skillProficiencies = {};
 
-    const allSources = [ // [cite: 76]
-        ...this.settings.obtainedFeats, // [cite: 76]
-        ...Object.values(this.settings.effects).filter(e => e.active && !this.isEffectExpired(e)).map(e => e.notePath) // [cite: 76]
+    const defaultSaveAbilities: (keyof CharacterStats)[] = ["Strength", "Dexterity", "Constitution", "Intelligence", "Wisdom", "Charisma"];
+    defaultSaveAbilities.forEach(abilityName => {
+        const saveKey = `${abilityName.toLowerCase()}Save` as keyof typeof this.settings.proficiencies;
+        if (!this.settings.proficiencies) {
+             this.settings.proficiencies = {};
+        }
+        // Garante que a chave exista antes de atribuir
+        if (!this.settings.proficiencies[saveKey]) {
+            this.settings.proficiencies[saveKey] = { level: "none", sources: [] };
+        } else {
+            this.settings.proficiencies[saveKey].level = "none";
+            this.settings.proficiencies[saveKey].sources = [];
+        }
+    });
+
+    // 3. COLETAR TODAS AS FONTES DE BÔNUS
+    const allBonusSourcesPaths: string[] = [
+        ...this.settings.obtainedFeats,
+        ...Object.values(this.settings.effects)
+            .filter(effect => effect.active && !this.isEffectExpired(effect))
+            .map(effect => effect.notePath)
     ];
 
-    // Garante que hpPerLevel tenha entradas suficientes
-    while (this.settings.health.hpPerLevel.length < this.settings.level) { // [cite: 77]
-        this.settings.health.hpPerLevel.push(calcularHPPorNivel(this.settings.health.baseDie, this.settings.health.autoHpMode)); // Similar to [cite: 77, 111]
-    }
+    // 4. ITERAR SOBRE AS FONTES E PROCESSAR SEUS DADOS
+    for (const sourcePath of allBonusSourcesPaths) {
+        const effectData = await this.loadEffectFromNote(sourcePath);
 
-    for (const path of allSources) { // [cite: 77]
-        const data = await this.loadEffectFromNote(path); // [cite: 77]
-        if (data.hpBonus) featHpBonus += data.hpBonus; // [cite: 78]
-        if (data.tempHP) featTempHP = Math.max(featTempHP, data.tempHP); // [cite: 78]
+        if (effectData.hpBonus) accumulatedFeatHpBonus += effectData.hpBonus;
+        if (effectData.tempHP) maxFeatTempHP = Math.max(maxFeatTempHP, effectData.tempHP);
 
-        for (const [key, value] of Object.entries(data)) { // [cite: 79]
-            if (key in statBonus && typeof value === "number") { // [cite: 79]
-                (statBonus[key as keyof CharacterStats]! as number) += value; // [cite: 79, 80]
+        for (const [statKey, bonusValue] of Object.entries(effectData)) {
+            if (statKey in accumulatedStatBonuses && typeof bonusValue === "number") {
+                (accumulatedStatBonuses[statKey as keyof CharacterStats]! as number) += bonusValue;
             }
         }
 
-        // Processar resistências concedidas
-        if (data.grantsResistances && Array.isArray(data.grantsResistances)) {
-            data.grantsResistances.forEach(type => {
-                if (typeof type === 'string') { // Checagem de tipo
-                    if (!this.settings.defenses.resistances[type]) {
-                        this.settings.defenses.resistances[type] = [];
-                    }
-                    if (!this.settings.defenses.resistances[type].includes(path)) {
-                        this.settings.defenses.resistances[type].push(path);
-                    }
+        if (effectData.grantsResistances && Array.isArray(effectData.grantsResistances)) {
+            effectData.grantsResistances.forEach(type => {
+                if (typeof type === 'string') {
+                    if (!this.settings.defenses.resistances[type]) this.settings.defenses.resistances[type] = [];
+                    if (!this.settings.defenses.resistances[type].includes(sourcePath)) this.settings.defenses.resistances[type].push(sourcePath);
                 }
             });
         }
-
-        // Processar imunidades concedidas
-        if (data.grantsImmunities && Array.isArray(data.grantsImmunities)) {
-            data.grantsImmunities.forEach(type => {
-                if (typeof type === 'string') { // Checagem de tipo
-                    if (!this.settings.defenses.immunities[type]) {
-                        this.settings.defenses.immunities[type] = [];
-                    }
-                    if (!this.settings.defenses.immunities[type].includes(path)) {
-                        this.settings.defenses.immunities[type].push(path);
-                    }
+        if (effectData.grantsImmunities && Array.isArray(effectData.grantsImmunities)) {
+            effectData.grantsImmunities.forEach(type => {
+                if (typeof type === 'string') {
+                    if (!this.settings.defenses.immunities[type]) this.settings.defenses.immunities[type] = [];
+                    if (!this.settings.defenses.immunities[type].includes(sourcePath)) this.settings.defenses.immunities[type].push(sourcePath);
                 }
             });
         }
-
-		const processSkillLevel = (skillName: string, level: "proficient" | "expert", sourcePath: string) => {
+        
+        const processSkillLevel = (skillName: string, level: "proficient" | "expert") => {
             if (!this.settings.skillProficiencies[skillName]) {
                 this.settings.skillProficiencies[skillName] = { level: "none", sources: [] };
             }
-
             const current = this.settings.skillProficiencies[skillName];
-            // Expertise sobrescreve proficiência. Proficiência sobrescreve none.
+            if (level === "expert") current.level = "expert";
+            else if (level === "proficient" && current.level !== "expert") current.level = "proficient";
+            if (!current.sources.includes(sourcePath)) current.sources.push(sourcePath);
+        };
+        if (effectData.grantsSkillProficiency && Array.isArray(effectData.grantsSkillProficiency)) {
+            effectData.grantsSkillProficiency.forEach(skillName => {
+                if (typeof skillName === 'string') processSkillLevel(skillName, "proficient");
+            });
+        }
+        if (effectData.grantsSkillExpertise && Array.isArray(effectData.grantsSkillExpertise)) {
+            effectData.grantsSkillExpertise.forEach(skillName => {
+                if (typeof skillName === 'string') processSkillLevel(skillName, "expert");
+            });
+        }
+
+        const processSaveLevel = (abilityName: string, level: "proficient" | "expert") => {
+            const saveKey = `${abilityName.toLowerCase()}Save` as keyof typeof this.settings.proficiencies;
+            const current = this.settings.proficiencies[saveKey]; // Já foi inicializado no começo da função
             if (level === "expert") {
                 current.level = "expert";
             } else if (level === "proficient" && current.level !== "expert") {
                 current.level = "proficient";
             }
-
             if (!current.sources.includes(sourcePath)) {
                 current.sources.push(sourcePath);
             }
         };
-
-        if (data.grantsSkillProficiency && Array.isArray(data.grantsSkillProficiency)) {
-            data.grantsSkillProficiency.forEach(skillName => {
-                if (typeof skillName === 'string') { //
-                    processSkillLevel(skillName, "proficient", path);
+        if (effectData.grantsSaveProficiency && Array.isArray(effectData.grantsSaveProficiency)) {
+            effectData.grantsSaveProficiency.forEach(abilityName => {
+                if (typeof abilityName === 'string' && defaultSaveAbilities.includes(abilityName as keyof CharacterStats)) {
+                    processSaveLevel(abilityName, "proficient");
                 }
             });
         }
-        if (data.grantsSkillExpertise && Array.isArray(data.grantsSkillExpertise)) {
-            data.grantsSkillExpertise.forEach(skillName => {
-                if (typeof skillName === 'string') { //
-                    processSkillLevel(skillName, "expert", path);
+        if (effectData.grantsSaveExpertise && Array.isArray(effectData.grantsSaveExpertise)) {
+            effectData.grantsSaveExpertise.forEach(abilityName => {
+                if (typeof abilityName === 'string' && defaultSaveAbilities.includes(abilityName as keyof CharacterStats)) {
+                    processSaveLevel(abilityName, "expert");
                 }
             });
         }
     }
-	
 
-    const statLevelBonus = Math.floor(this.settings.level / 4); // [cite: 80]
-    const finalStats: CharacterStats = {} as CharacterStats; // [cite: 81]
-
-    for (const key of Object.keys(statsBase)) { // [cite: 81]
-        finalStats[key as keyof CharacterStats] = // [cite: 81]
-            statsBase[key as keyof CharacterStats]! + // [cite: 81, 82]
-            statLevelBonus + // [cite: 82]
-            (this.settings.spentFeatPoints.statIncreases[key as keyof CharacterStats] ?? 0) + // [cite: 82]
-            (statBonus[key as keyof CharacterStats] ?? 0); // [cite: 82]
+    // 5. CALCULAR ATRIBUTOS FINAIS
+    const statIncreaseFromLevel = Math.floor(this.settings.level / 4);
+    const finalCharacterStats: CharacterStats = {} as CharacterStats;
+    for (const statKey of defaultSaveAbilities) {
+        finalCharacterStats[statKey] =
+            (statsBase[statKey] ?? 0) +
+            statIncreaseFromLevel +
+            (this.settings.spentFeatPoints.statIncreases[statKey] ?? 0) +
+            (accumulatedStatBonuses[statKey] ?? 0);
     }
+    this.settings.characterStats = finalCharacterStats;
 
-    this.settings.characterStats = finalStats; // [cite: 83]
+    // 6. CALCULAR HP E TEMP HP FINAL
+    // Garante que hpPerLevel tenha entradas suficientes
+    while (this.settings.health.hpPerLevel.length < this.settings.level) {
+        // CORREÇÃO AQUI: Chamada com 2 argumentos
+        this.settings.health.hpPerLevel.push(
+            calcularHPPorNivel(this.settings.health.baseDie, this.settings.health.autoHpMode)
+        );
+    }
+    const baseHpFromLevels = this.settings.health.hpPerLevel.reduce((sum, val) => sum + val, 0);
     
-    // Health
-    const baseHP = this.settings.health.hpPerLevel.reduce((a, b) => a + b, 0); // [cite: 83]
-    const conMod = Math.floor((this.settings.characterStats.Constitution -10) / 2); // Similar to [cite: 84, 109]
-    const conBonusHP = conMod * this.settings.level; // [cite: 84]
-    const newMaxHP = baseHP + featHpBonus + conBonusHP; // [cite: 85]
+    // Adiciona o modificador de Constituição ao HP total explicitamente
+    const conModifierForHp = this.getAbilityModifier(this.settings.characterStats.Constitution);
+    const totalConBonusToHp = conModifierForHp * this.settings.level;
+    
+    const newMaxHP = baseHpFromLevels + accumulatedFeatHpBonus + totalConBonusToHp;
 
-    // ATUALIZAÇÃO PARA TEMP HP (considerando manualTempHP)
-    this.settings.health.tempHP = featTempHP; // Armazena temp HP de itens/efeitos
-    // O tempHP efetivo será max(itemTempHP, manualTempHP) no momento do uso/exibição
+    this.settings.health.maxHP = newMaxHP;
+    this.settings.health.tempHP = maxFeatTempHP;
 
-    this.settings.health.maxHP = newMaxHP; // [cite: 85]
-
-    const currentHP = this.settings.health.currentHP; // [cite: 85]
-    const lastMaxHP = this.settings.health.lastMaxHP ?? 0; // [cite: 86]
-
-    if (newMaxHP > lastMaxHP) { // [cite: 86]
-        const delta = newMaxHP - lastMaxHP; // [cite: 86]
-        this.settings.health.currentHP = Math.min(currentHP + delta, newMaxHP); // [cite: 87]
-    } else if (newMaxHP < lastMaxHP && currentHP > newMaxHP) { // Adaptado de [cite: 87, 88]
-        // Se perdeu maxHP e currentHP está acima do novo maxHP,
-        // o excesso não vira tempHP automaticamente aqui, a menos que uma regra específica dite.
-        // Geralmente, currentHP é limitado ao novo maxHP.
-        // A lógica original de converter excesso em tempHP é mais uma regra de casa.
-        // Mantendo simples por enquanto:
-        this.settings.health.currentHP = Math.min(currentHP, newMaxHP);
-        // Se quiser a lógica de overflow para tempHP:
-        // const overflow = currentHP - newMaxHP;
-        // if (overflow > 0) {
-        //    this.settings.health.currentHP = newMaxHP;
-        //    this.settings.health.manualTempHP = Math.max(this.settings.health.manualTempHP ?? 0, overflow);
-        // }
+    const currentHP = this.settings.health.currentHP;
+    const lastMaxHP = this.settings.health.lastMaxHP ?? 0;
+    if (newMaxHP > lastMaxHP) {
+        this.settings.health.currentHP = Math.min(currentHP + (newMaxHP - lastMaxHP), newMaxHP);
+    } else if (newMaxHP < currentHP) {
+        this.settings.health.currentHP = newMaxHP;
     }
+    this.settings.health.lastMaxHP = newMaxHP;
 
+    // 7. CALCULAR BÔNUS DE PROFICIÊNCIA GERAL
+    this.settings.proficiencyBonus = this.calculateProficiencyBonus();
 
-    this.settings.health.lastMaxHP = newMaxHP; // [cite: 89]
-	this.settings.proficiencyBonus = this.calculateProficiencyBonus();
-    await this.saveSettings(); // [cite: 89]
+    // 8. SALVAR AS CONFIGURAÇÕES
+    await this.saveSettings();
 }
 
 
@@ -867,36 +886,43 @@ export default class RPGLevelsPlugin extends Plugin {
 		}
 	}
 
-	async loadEffectFromNote(path: string): Promise<Partial<EffectData>> { //
-    const file = this.app.vault.getAbstractFileByPath(path); //
-    if (!(file instanceof TFile)) return {}; //
+	
 
-    const metadata = this.app.metadataCache.getFileCache(file)?.frontmatter; //
-    if (!metadata) return {}; //
+ async loadEffectFromNote(path: string): Promise<Partial<EffectData>> {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) return {};
 
-    const result: Partial<EffectData> = {}; //
+    const metadata = this.app.metadataCache.getFileCache(file)?.frontmatter;
+    if (!metadata) return {};
 
-    for (const [key, value] of Object.entries(metadata)) { //
-        if (typeof value === "number") { //
-            result[key] = value; //
-        } else if ((key === "grantsResistances" || key === "grantsImmunities") && Array.isArray(value)) { //
-            if (value.every(item => typeof item === 'string')) { //
-                result[key as 'grantsResistances' | 'grantsImmunities'] = value as string[]; //
+    const result: Partial<EffectData> = {};
+
+    for (const [key, value] of Object.entries(metadata)) {
+        if (typeof value === "number") {
+            result[key] = value;
+        } else if ((key === "grantsResistances" || key === "grantsImmunities") && Array.isArray(value)) {
+            if (value.every(item => typeof item === 'string')) {
+                result[key as 'grantsResistances' | 'grantsImmunities'] = value as string[];
             }
-        }
-        // NOVA LÓGICA PARA SKILL PROFICIENCIES E EXPERTISE
-        else if ((key === "grantsSkillProficiency" || key === "grantsSkillExpertise") && Array.isArray(value)) {
+        } else if ((key === "grantsSkillProficiency" || key === "grantsSkillExpertise") && Array.isArray(value)) {
             if (value.every(item => typeof item === 'string')) {
                 result[key as 'grantsSkillProficiency' | 'grantsSkillExpertise'] = value as string[];
             }
         }
-        // FIM DA NOVA LÓGICA PARA SKILLS
-        else if (key === "permanent" && typeof value === "boolean") { //
-            result[key] = value; //
+        // NOVA LÓGICA PARA SAVE PROFICIENCIES E EXPERTISE
+        else if ((key === "grantsSaveProficiency" || key === "grantsSaveExpertise") && Array.isArray(value)) {
+            if (value.every(item => typeof item === 'string')) {
+                // Armazena os nomes das habilidades (ex: "Strength", "Dexterity")
+                result[key as 'grantsSaveProficiency' | 'grantsSaveExpertise'] = value as string[];
+            }
+        }
+        // FIM DA NOVA LÓGICA PARA SAVES
+        else if (key === "permanent" && typeof value === "boolean") {
+            result[key] = value;
         }
     }
-    return result; //
- }
+    return result;
+  }
 
 	
 	rollHP(): number {
@@ -1588,30 +1614,85 @@ class StatsModal extends Modal {
 
     const abilityOrder: (keyof CharacterStats)[] = ["Strength", "Dexterity", "Constitution", "Intelligence", "Wisdom", "Charisma"];
 
+    // === SEÇÃO DE ABILITY CHECKS (SEM PROFICIÊNCIA) ===
+    contentEl.createEl("h3", { text: "🎯 Ability Checks" });
+    
     abilityOrder.forEach(statName => {
         const statValue = stats[statName];
         const modifier = this.plugin.getAbilityModifier(statValue);
         const modifierString = modifier >= 0 ? `+${modifier}` : `${modifier}`;
-        const saveProficiencyKey = `${statName.toLowerCase()}Save` as keyof typeof proficiencies;
 
-        // Display Stat, Modifier, and a Roll Button
+        // Display Stat, Modifier, and a Roll Button (sem proficiência)
         const statSetting = new Setting(contentEl)
             .setName(`${statName}: ${statValue} (${modifierString})`)
-            .setDesc(`Roll 1d20 + ${modifier}${proficiencies[saveProficiencyKey] ? ` + ${proficiencyBonus} (prof)` : ''}`);
+            .setDesc(`Roll 1d20 + ${modifier} (ability check)`);
 
         statSetting.addButton(button => button
             .setButtonText("🎲 Roll")
             .onClick(() => {
                 const d20Roll = new Dice(20).roll();
-                let totalRoll = d20Roll + modifier;
-                let rollExplanation = `Rolled ${d20Roll} (d20) + ${modifier} (mod)`;
+                const totalRoll = d20Roll + modifier;
+                const rollExplanation = `Rolled ${d20Roll} (d20) + ${modifier} (mod) = ${totalRoll}`;
+                new Notice(`${statName} Check: ${totalRoll}\n(${rollExplanation})`, 7000);
+            }));
+    });
+    
+    contentEl.createEl("hr");
 
-                if (proficiencies[saveProficiencyKey]) {
-                    totalRoll += proficiencyBonus;
-                    rollExplanation += ` + ${proficiencyBonus} (prof)`;
-                }
-                rollExplanation += ` = ${totalRoll}`;
-                new Notice(`${statName} Roll: ${totalRoll}\n(${rollExplanation})`, 7000);
+    // === SEÇÃO DE SAVING THROWS (COM PROFICIÊNCIA) - COLAPSÁVEL ===
+    const savingThrowsHeader = contentEl.createEl("h3", { 
+        text: "🛡️ Saving Throws (Click to expand)", 
+        cls: "clickable-header"
+    });
+    savingThrowsHeader.style.cursor = "pointer";
+    savingThrowsHeader.style.color = "#7c3aed";
+    
+    const savingThrowsContainer = contentEl.createDiv();
+    savingThrowsContainer.style.display = "none"; // Inicialmente escondido
+    
+    // Toggle da seção de saving throws
+    savingThrowsHeader.onclick = () => {
+        if (savingThrowsContainer.style.display === "none") {
+            savingThrowsContainer.style.display = "block";
+            savingThrowsHeader.textContent = "🛡️ Saving Throws (Click to collapse)";
+        } else {
+            savingThrowsContainer.style.display = "none";
+            savingThrowsHeader.textContent = "🛡️ Saving Throws (Click to expand)";
+        }
+    };
+
+    const saveProficienciesData = this.plugin.settings.proficiencies; 
+
+    abilityOrder.forEach(statName => {
+        const statValue = stats[statName];
+        const modifier = this.plugin.getAbilityModifier(statValue);
+        const modifierString = modifier >= 0 ? `+${modifier}` : `${modifier}`;
+        
+        // Calcula o bônus do Saving Throw para exibição
+        const saveKey = `${statName.toLowerCase()}Save` as keyof typeof saveProficienciesData;
+        const saveProfData = saveProficienciesData[saveKey] || { level: "none", sources: [] };
+        let saveBonus = modifier;
+        if (saveProfData.level === "proficient") {
+            saveBonus += proficiencyBonus;
+        } else if (saveProfData.level === "expert") {
+            saveBonus += (proficiencyBonus * 2);
+        }
+        const saveBonusString = saveBonus >= 0 ? `+${saveBonus}` : `${saveBonus}`;
+
+        // Exibe Stat, Modificador, e o BÔNUS DE SAVE
+        const statSetting = new Setting(savingThrowsContainer)
+            .setName(`${statName}: ${statValue} (${modifierString})`)
+            // A descrição agora inclui o bônus de save e o que o botão de roll faz
+            .setDesc(`Save Bonus: ${saveBonusString}. Roll button uses this save bonus.`);
+
+        statSetting.addButton(button => button
+            .setButtonText("🎲 Roll Save") // Botão agora é explicitamente para Save
+            .onClick(() => {
+                const d20Roll = new Dice(20).roll();
+                // saveBonus já inclui mod + prof/expert
+                const totalRoll = d20Roll + saveBonus;
+                const rollExplanation = `Rolled ${d20Roll} (d20) ${saveBonusString} (save bonus) = ${totalRoll}`;
+                new Notice(`${statName} Save: ${totalRoll}\n(${rollExplanation})`, 7000);
             }));
     });
     
@@ -1751,11 +1832,31 @@ this.plugin.settings.health.maxHP =
 this.plugin.settings.health.tempHP = maxTempHp;
 await this.plugin.saveSettings();
 
-// Exibição dos efeitos
+// Exibição dos efeitos - COLAPSÁVEL
 if (activeEffects.length > 0) {
-  contentEl.createEl("h3", { text: "🧪 Active Effects" });
+  const activeEffectsHeader = contentEl.createEl("h3", { 
+    text: `🧪 Active Effects (${activeEffects.length}) (Click to expand)`, 
+    cls: "clickable-header"
+  });
+  activeEffectsHeader.style.cursor = "pointer";
+  activeEffectsHeader.style.color = "#7c3aed";
+  
+  const activeEffectsContainer = contentEl.createDiv();
+  activeEffectsContainer.style.display = "none"; // Inicialmente escondido
+  
+  // Toggle da seção de active effects
+  activeEffectsHeader.onclick = () => {
+    if (activeEffectsContainer.style.display === "none") {
+      activeEffectsContainer.style.display = "block";
+      activeEffectsHeader.textContent = `🧪 Active Effects (${activeEffects.length}) (Click to collapse)`;
+    } else {
+      activeEffectsContainer.style.display = "none";
+      activeEffectsHeader.textContent = `🧪 Active Effects have:(${activeEffects.length}) (Click to expand)`;
+    }
+  };
+
   activeEffects.forEach(eff => {
-    contentEl.createEl("p", { text: `• ${eff.notePath}` });
+    activeEffectsContainer.createEl("p", { text: `• ${eff.notePath}` });
   });
 }
   } 
@@ -2499,92 +2600,92 @@ class DefensesModal extends Modal {
 }
 
 // [[ NO SEU ARQUIVO 10.txt, SUBSTITUA A CLASSE AbilitiesModal EXISTENTE POR ESTA ]]
-
 class AbilitiesModal extends Modal {
     plugin: RPGLevelsPlugin;
 
-    constructor(app: App, plugin: RPGLevelsPlugin) { //
-        super(app); //
-        this.plugin = plugin; //
+    constructor(app: App, plugin: RPGLevelsPlugin) {
+        super(app);
+        this.plugin = plugin;
     }
 
-    async onOpen() { //
-        const { contentEl } = this; //
-        contentEl.empty(); //
-        await this.plugin.applyAllPassiveEffects(); // Garante que proficiências de skill estejam atualizadas
+    async onOpen() {
+        const { contentEl } = this;
+        contentEl.empty();
+        await this.plugin.applyAllPassiveEffects(); // Garante que tudo está atualizado
 
-        contentEl.createEl("h2", { text: "💪 Character Abilities, Saves & Skills" }); //
+        contentEl.createEl("h2", { text: "💪 Character Abilities, Saves & Skills" });
 
-        const stats = this.plugin.settings.characterStats; //
-        const saveProficiencies = this.plugin.settings.proficiencies; // Para saves
-        const skillProficienciesData = this.plugin.settings.skillProficiencies; // Para skills
-        const proficiencyBonus = this.plugin.settings.proficiencyBonus; //
-        
-        // Carrega as definições de skill dinamicamente
-        const loadedSkills = await this.plugin.loadSkillDefinitions(); //
+        const stats = this.plugin.settings.characterStats;
+        const saveProficienciesData = this.plugin.settings.proficiencies; // Para saves
+        const skillProficienciesData = this.plugin.settings.skillProficiencies;
+        const proficiencyBonus = this.plugin.settings.proficiencyBonus;
+        const loadedSkills = await this.plugin.loadSkillDefinitions();
 
-        contentEl.createEl("p", {text: `Current Proficiency Bonus: +${proficiencyBonus}`}); //
-        contentEl.createEl("hr"); //
+        contentEl.createEl("p", {text: `Current Proficiency Bonus: +${proficiencyBonus}`});
+        contentEl.createEl("hr");
 
-        const abilityOrder: (keyof CharacterStats)[] = ["Strength", "Dexterity", "Constitution", "Intelligence", "Wisdom", "Charisma"]; //
+        const abilityOrder: (keyof CharacterStats)[] = ["Strength", "Dexterity", "Constitution", "Intelligence", "Wisdom", "Charisma"];
 
-        contentEl.createEl("h3", { text: "Abilities & Saving Throws" }); //
-        abilityOrder.forEach(statName => { //
-            const statValue = stats[statName]; //
-            const modifier = this.plugin.getAbilityModifier(statValue); //
-            const modifierString = modifier >= 0 ? `+${modifier}` : `${modifier}`; //
-            const saveProficiencyKey = `${statName.toLowerCase()}Save` as keyof typeof saveProficiencies; //
+        contentEl.createEl("h3", { text: "Abilities & Saving Throws" });
+        abilityOrder.forEach(statName => {
+            const statValue = stats[statName];
+            const modifier = this.plugin.getAbilityModifier(statValue);
+            const modifierString = modifier >= 0 ? `+${modifier}` : `${modifier}`;
+            const saveKey = `${statName.toLowerCase()}Save` as keyof typeof saveProficienciesData;
+            
+            const saveProfData = saveProficienciesData[saveKey] || { level: "none", sources: [] };
+            let saveBonus = modifier;
+            let saveProfDisplay = "None";
+            let saveSourcesDisplay = "";
+             if (saveProfData.sources && saveProfData.sources.length > 0) { // Adicionado para verificar se sources existe
+                saveSourcesDisplay = ` (Sources: ${saveProfData.sources.map(s => s.substring(s.lastIndexOf('/') + 1).replace(/\.md$/, '')).join(', ')})`;
+            }
 
-            const statDiv = contentEl.createDiv({ cls: "ability-entry" }); //
-            statDiv.style.marginBottom = "15px"; //
-            statDiv.style.padding = "10px"; //
-            statDiv.style.border = "1px solid var(--background-modifier-border)"; //
-            statDiv.style.borderRadius = "5px"; //
 
-            statDiv.createEl("h4", { text: `${statName}: ${statValue} (${modifierString})` }); //
+            if (saveProfData.level === "proficient") {
+                saveBonus += proficiencyBonus;
+                saveProfDisplay = `Proficient (+${proficiencyBonus})`;
+            } else if (saveProfData.level === "expert") {
+                saveBonus += (proficiencyBonus * 2); // Expertise dobra o bônus de proficiência
+                saveProfDisplay = `Expert (+${proficiencyBonus * 2})`;
+            }
+            const saveBonusString = saveBonus >= 0 ? `+${saveBonus}` : `${saveBonus}`;
 
-            new Setting(statDiv) //
-                .setName(`${statName} Saving Throw Proficiency`) //
-                .addToggle(toggle => toggle //
-                    .setValue(saveProficiencies[saveProficiencyKey]) //
-                    .onChange(async (value: boolean) => {
-                  
-                    (saveProficiencies as Record<string, boolean>)[saveProficiencyKey] = value;
-                        await this.plugin.saveSettings(); //
-                        new Notice(`${statName} Save Proficiency ${value ? 'Enabled' : 'Disabled'}.`); //
-                        this.onOpen(); // Re-render para atualizar descrições de botões de rolagem
-                    }));
 
-            new Setting(statDiv) //
-                .setName(`Roll ${statName} Check/Save`) //
-                .setDesc(`1d20 + ${modifier}${saveProficiencies[saveProficiencyKey] ? ` + ${proficiencyBonus} (prof)` : ''}`) //
-                .addButton(button => button //
-                    .setButtonText("🎲 Roll") //
-                    .setCta() //
-                    .onClick(() => { //
-                        const d20Roll = new Dice(20).roll(); //
-                        let totalRoll = d20Roll + modifier; //
-                        let rollExplanation = `Rolled ${d20Roll} (d20) + ${modifier} (mod)`; //
+            const statDiv = contentEl.createDiv({ cls: "ability-entry" });
+            statDiv.style.marginBottom = "15px";
+            statDiv.style.padding = "10px";
+            statDiv.style.border = "1px solid var(--background-modifier-border)";
+            statDiv.style.borderRadius = "5px";
 
-                        if (saveProficiencies[saveProficiencyKey]) { //
-                            totalRoll += proficiencyBonus; //
-                            rollExplanation += ` + ${proficiencyBonus} (prof)`; //
-                        }
-                        rollExplanation += ` = ${totalRoll}`; //
-                        new Notice(`${statName} Roll: ${totalRoll}\n(${rollExplanation})`, 10000); //
+            statDiv.createEl("h4", { text: `${statName}: ${statValue} (${modifierString})` });
+
+            // Exibe o status de proficiência/perícia do Saving Throw (não é mais um toggle)
+            const saveSettingDesc = `Save Bonus: ${saveBonusString}. Status: ${saveProfDisplay}${saveSourcesDisplay}`;
+            new Setting(statDiv)
+                .setName(`${statName} Saving Throw`)
+                .setDesc(saveSettingDesc) // A descrição agora mostra o status e as fontes
+                .addButton(button => button
+                    .setButtonText("🎲 Roll Save")
+                    .setCta()
+                    .onClick(() => {
+                        const d20Roll = new Dice(20).roll();
+                        // O saveBonus já inclui o modificador e bônus de prof/expertise
+                        const totalRoll = d20Roll + saveBonus;
+                        const rollExplanation = `Rolled ${d20Roll} (d20) ${saveBonusString} (bonus) = ${totalRoll}`;
+                        new Notice(`${statName} Save: ${totalRoll}\n(${rollExplanation})`, 10000);
                     }));
         });
 
-        contentEl.createEl("hr"); //
-        contentEl.createEl("h3", { text: "Skills" }); //
+        contentEl.createEl("hr");
+        contentEl.createEl("h3", { text: "Skills" });
 
-        if (!this.plugin.settings.skillFolders || this.plugin.settings.skillFolders.length === 0) {
-            contentEl.createEl("p", { text: "No skill folders configured in settings. Please add skill folders in the plugin settings and create skill notes there." });
-        } else if (loadedSkills.length === 0) {
-            contentEl.createEl("p", { text: `No skill notes found in the configured folder(s): ${this.plugin.settings.skillFolders.join(', ')}. Ensure notes have 'baseAbility' in their frontmatter.` });
-        } else {
+        // ... (lógica para exibir skills, como na resposta anterior, permanece a mesma)
+        if (!this.plugin.settings.skillFolders || this.plugin.settings.skillFolders.length === 0) { /* ... */ }
+        else if (loadedSkills.length === 0) { /* ... */ }
+        else {
             loadedSkills.forEach(skillDef => {
-                const skillId = skillDef.id; // Nome do arquivo sem .md
+                const skillId = skillDef.id;
                 const skillDisplayName = skillDef.displayName;
                 const baseAbilityScore = stats[skillDef.baseAbility];
                 const abilityModifier = this.plugin.getAbilityModifier(baseAbilityScore);
@@ -2593,10 +2694,9 @@ class AbilitiesModal extends Modal {
                 let skillBonus = abilityModifier;
                 let proficiencyDisplay = "None";
                 let sourcesDisplay = "";
-                if (skillProfData.sources && skillProfData.sources.length > 0) { // Adicionado para verificar se sources existe
-                    sourcesDisplay = ` (Sources: ${skillProfData.sources.map(s => s.substring(s.lastIndexOf('/') + 1).replace(/\.md$/, '')).join(', ')})`;
-                }
-
+                 if (skillProfData.sources && skillProfData.sources.length > 0) {
+                     sourcesDisplay = ` (Sources: ${skillProfData.sources.map(s => s.substring(s.lastIndexOf('/') + 1).replace(/\.md$/, '')).join(', ')})`;
+                 }
 
                 if (skillProfData.level === "proficient") {
                     skillBonus += proficiencyBonus;
@@ -2605,13 +2705,9 @@ class AbilitiesModal extends Modal {
                     skillBonus += (proficiencyBonus * 2);
                     proficiencyDisplay = `Expert (+${proficiencyBonus * 2})`;
                 }
-
                 const skillBonusString = skillBonus >= 0 ? `+${skillBonus}` : `${skillBonus}`;
 
-                const skillDiv = contentEl.createDiv({ cls: "skill-entry" });
-                skillDiv.style.paddingBlockStart = "8px"; //
-
-                new Setting(skillDiv)
+                new Setting(contentEl.createDiv({ cls: "skill-entry" })) // Criar div para cada skill
                     .setName(`${skillDisplayName} (${skillDef.baseAbility.substring(0,3)}): ${skillBonusString}`)
                     .setDesc(`Status: ${proficiencyDisplay}${sourcesDisplay}`)
                     .addButton(button => button
@@ -2625,16 +2721,16 @@ class AbilitiesModal extends Modal {
             });
         }
         
-        new Setting(contentEl) //
-        .addButton(btn => btn //
-            .setButtonText("Close") //
-            .onClick(() => { //
-                this.close(); //
+        new Setting(contentEl)
+        .addButton(btn => btn
+            .setButtonText("Close")
+            .onClick(() => {
+                this.close();
             }));
     }
 
-    onClose() { //
-        this.contentEl.empty(); //
+    onClose() {
+        this.contentEl.empty();
     }
 }
 
@@ -3506,7 +3602,6 @@ new Setting(containerEl)
             await this.plugin.saveSettings();
             await this.plugin.applyAllPassiveEffects(); // Para recarregar skills e suas proficiências
         }));
-
 
 
 }

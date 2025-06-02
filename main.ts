@@ -15,7 +15,7 @@ interface CharacterStats {
 interface CharacterDefenses {
     resistances: { [damageType: string]: string[] }; // Fontes de resistência
     immunities: { [damageType: string]: string[] };  // Fontes de imunidade
-    // vulnerabilities?: { [damageType: string]: string[] }; // Para expansão futura
+    //vulnerabilities?: { [damageType: string]: string[] }; // Para expansão futura
 }
 
 interface EffectData {
@@ -2599,7 +2599,8 @@ class DefensesModal extends Modal {
   }
 }
 
-// [[ NO SEU ARQUIVO 10.txt, SUBSTITUA A CLASSE AbilitiesModal EXISTENTE POR ESTA ]]
+// [[ NO SEU ARQUIVO main.ts (ou 10.txt), ATUALIZE A CLASSE AbilitiesModal ]]
+
 class AbilitiesModal extends Modal {
     plugin: RPGLevelsPlugin;
 
@@ -2611,21 +2612,21 @@ class AbilitiesModal extends Modal {
     async onOpen() {
         const { contentEl } = this;
         contentEl.empty();
-        await this.plugin.applyAllPassiveEffects(); // Garante que tudo está atualizado
+        await this.plugin.applyAllPassiveEffects();
 
         contentEl.createEl("h2", { text: "💪 Character Abilities, Saves & Skills" });
 
         const stats = this.plugin.settings.characterStats;
-        const saveProficienciesData = this.plugin.settings.proficiencies; // Para saves
+        const saveProficienciesData = this.plugin.settings.proficiencies;
         const skillProficienciesData = this.plugin.settings.skillProficiencies;
         const proficiencyBonus = this.plugin.settings.proficiencyBonus;
-        const loadedSkills = await this.plugin.loadSkillDefinitions();
+        const loadedSkills = await this.plugin.loadSkillDefinitions(); // Carrega skills das notas
 
         contentEl.createEl("p", {text: `Current Proficiency Bonus: +${proficiencyBonus}`});
         contentEl.createEl("hr");
 
+        // ... (seção de Abilities & Saving Throws - permanece como na resposta anterior) ...
         const abilityOrder: (keyof CharacterStats)[] = ["Strength", "Dexterity", "Constitution", "Intelligence", "Wisdom", "Charisma"];
-
         contentEl.createEl("h3", { text: "Abilities & Saving Throws" });
         abilityOrder.forEach(statName => {
             const statValue = stats[statName];
@@ -2637,20 +2638,18 @@ class AbilitiesModal extends Modal {
             let saveBonus = modifier;
             let saveProfDisplay = "None";
             let saveSourcesDisplay = "";
-             if (saveProfData.sources && saveProfData.sources.length > 0) { // Adicionado para verificar se sources existe
+             if (saveProfData.sources && saveProfData.sources.length > 0) {
                 saveSourcesDisplay = ` (Sources: ${saveProfData.sources.map(s => s.substring(s.lastIndexOf('/') + 1).replace(/\.md$/, '')).join(', ')})`;
             }
-
 
             if (saveProfData.level === "proficient") {
                 saveBonus += proficiencyBonus;
                 saveProfDisplay = `Proficient (+${proficiencyBonus})`;
             } else if (saveProfData.level === "expert") {
-                saveBonus += (proficiencyBonus * 2); // Expertise dobra o bônus de proficiência
+                saveBonus += (proficiencyBonus * 2);
                 saveProfDisplay = `Expert (+${proficiencyBonus * 2})`;
             }
             const saveBonusString = saveBonus >= 0 ? `+${saveBonus}` : `${saveBonus}`;
-
 
             const statDiv = contentEl.createDiv({ cls: "ability-entry" });
             statDiv.style.marginBottom = "15px";
@@ -2660,32 +2659,31 @@ class AbilitiesModal extends Modal {
 
             statDiv.createEl("h4", { text: `${statName}: ${statValue} (${modifierString})` });
 
-            // Exibe o status de proficiência/perícia do Saving Throw (não é mais um toggle)
-            const saveSettingDesc = `Save Bonus: ${saveBonusString}. Status: ${saveProfDisplay}${saveSourcesDisplay}`;
             new Setting(statDiv)
                 .setName(`${statName} Saving Throw`)
-                .setDesc(saveSettingDesc) // A descrição agora mostra o status e as fontes
+                .setDesc(`Save Bonus: ${saveBonusString}. Status: ${saveProfDisplay}${saveSourcesDisplay}`)
                 .addButton(button => button
                     .setButtonText("🎲 Roll Save")
                     .setCta()
                     .onClick(() => {
                         const d20Roll = new Dice(20).roll();
-                        // O saveBonus já inclui o modificador e bônus de prof/expertise
                         const totalRoll = d20Roll + saveBonus;
-                        const rollExplanation = `Rolled ${d20Roll} (d20) ${saveBonusString} (bonus) = ${totalRoll}`;
+                        const rollExplanation = `Rolled ${d20Roll} (d20) ${saveBonusString} (save bonus) = ${totalRoll}`;
                         new Notice(`${statName} Save: ${totalRoll}\n(${rollExplanation})`, 10000);
                     }));
         });
 
+
         contentEl.createEl("hr");
         contentEl.createEl("h3", { text: "Skills" });
 
-        // ... (lógica para exibir skills, como na resposta anterior, permanece a mesma)
-        if (!this.plugin.settings.skillFolders || this.plugin.settings.skillFolders.length === 0) { /* ... */ }
-        else if (loadedSkills.length === 0) { /* ... */ }
-        else {
+        if (!this.plugin.settings.skillFolders || this.plugin.settings.skillFolders.length === 0) {
+            contentEl.createEl("p", { text: "No skill folders configured in settings. Please add skill folders in the plugin settings and create skill notes there." });
+        } else if (loadedSkills.length === 0) {
+            contentEl.createEl("p", { text: `No skill notes found in the configured folder(s): ${this.plugin.settings.skillFolders.join(', ')}. Ensure notes have 'baseAbility' in their frontmatter.` });
+        } else {
             loadedSkills.forEach(skillDef => {
-                const skillId = skillDef.id;
+                const skillId = skillDef.id; // Nome do arquivo sem .md
                 const skillDisplayName = skillDef.displayName;
                 const baseAbilityScore = stats[skillDef.baseAbility];
                 const abilityModifier = this.plugin.getAbilityModifier(baseAbilityScore);
@@ -2707,8 +2705,8 @@ class AbilitiesModal extends Modal {
                 }
                 const skillBonusString = skillBonus >= 0 ? `+${skillBonus}` : `${skillBonus}`;
 
-                new Setting(contentEl.createDiv({ cls: "skill-entry" })) // Criar div para cada skill
-                    .setName(`${skillDisplayName} (${skillDef.baseAbility.substring(0,3)}): ${skillBonusString}`)
+                // MODIFICAÇÃO AQUI para tornar o nome da skill clicável
+                const skillSetting = new Setting(contentEl.createDiv({ cls: "skill-entry" }))
                     .setDesc(`Status: ${proficiencyDisplay}${sourcesDisplay}`)
                     .addButton(button => button
                         .setButtonText("🎲 Roll")
@@ -2718,6 +2716,20 @@ class AbilitiesModal extends Modal {
                             const rollExplanation = `Rolled ${d20Roll} (d20) ${skillBonusString} (bonus) = ${totalRoll}`;
                             new Notice(`${skillDisplayName} Check: ${totalRoll}\n(${rollExplanation})`, 10000);
                         }));
+                
+                // Limpa o nome padrão e cria um link clicável
+                skillSetting.nameEl.empty(); 
+                const linkEl = skillSetting.nameEl.createEl('a', {
+                    // href: skillDef.filePath, // Obsidian trata links internos de forma especial
+                    text: skillDisplayName,
+                    cls: 'internal-link skill-name-link' // Adiciona classes para estilização e identificação
+                });
+                linkEl.addEventListener('click', (ev) => {
+                    ev.preventDefault(); // Previne comportamento padrão do link se houver
+                    this.app.workspace.openLinkText(skillDef.filePath, skillDef.filePath, false);
+                });
+                // Adiciona o resto do texto do nome (atributo base e bônus)
+                skillSetting.nameEl.appendText(` (${skillDef.baseAbility.substring(0,3)}): ${skillBonusString}`);
             });
         }
         
@@ -2733,7 +2745,6 @@ class AbilitiesModal extends Modal {
         this.contentEl.empty();
     }
 }
-
 
 class QuestModal extends Modal {
 	plugin: RPGLevelsPlugin;

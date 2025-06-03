@@ -3820,7 +3820,7 @@ new Setting(containerEl)
 			new Setting(questForm)
 				.setName('XP Reward')
 				.addSlider(slider => slider
-					.setLimits(10, 200, 5)
+					.setLimits(10, 20000, 5)
 					.setValue(50)
 					.setDynamicTooltip()
 					.onChange(value => {

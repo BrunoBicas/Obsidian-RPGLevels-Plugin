@@ -16,6 +16,21 @@ interface SpeedSettings {
   additionalSpeeds: Record<string, { type: string; value: number; sources: string[] }>;
 }
 
+interface VisionSenseData {
+  range: number;
+  sources: string[]; // Paths of notes (feats/effects) granting this sense
+  details?: string;   // Optional: For specific nuances, e.g., "can't see through total cover"
+}
+
+interface VisionSettings {
+  senses: Record<string, VisionSenseData>; // Keyed by sense type, e.g., "darkvision", "blindsight", "keen smell"
+  // Example:
+  // senses: {
+  //   "darkvision": { range: 60, sources: ["Feats/NightOwl.md"], details: "Sees in dim light as bright, darkness as dim." },
+  //   "blindsight": { range: 30, sources: ["Effects/EchoSensePotion.md"] }
+  // }
+}
+
 
 interface CharacterDefenses {
     resistances: { [damageType: string]: string[] }; // Fontes de resistência
@@ -97,6 +112,11 @@ interface RPGLevelsSettings {
 	health: HealthData;
 
 	trainingLog: Record<number, TrainingEntry>;
+
+  
+  healthModalNotePath?: string; // NEW
+  speedModalNotePath?: string;   // NEW
+  visionModalNotePath?: string;  // NEW
  
 
 	quests: {
@@ -139,9 +159,8 @@ interface RPGLevelsSettings {
     };
 	skillFolders: string[];
   speed: SpeedSettings;
-    // For future expansion:
-    // modifiers: { : number }; // e.g., "Boots of Speed": +10
-  };
+  vision: VisionSettings; // New vision settings
+};
 
 
 const DEFAULT_SETTINGS: RPGLevelsSettings = {
@@ -194,6 +213,14 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
     baseSpeed: 30, // Default walking speed
     additionalSpeeds: {},
   },
+
+  vision: { // New default vision settings
+    senses: {}
+  },
+
+  healthModalNotePath: '',   // NEW
+  speedModalNotePath: '',    // NEW
+  visionModalNotePath: '',   // NEW
 
 
 	effectFolders: [],
@@ -651,6 +678,7 @@ async applyAllPassiveEffects() {
     this.settings.skillProficiencies = {};
     this.settings.speed.baseSpeed = 30; // Reset to default before applying bonuses
     this.settings.speed.additionalSpeeds = {};
+    this.settings.vision = { senses: {} }; 
 
 
     const defaultSaveAbilities: (keyof CharacterStats)[] = ["Strength", "Dexterity", "Constitution", "Intelligence", "Wisdom", "Charisma"];
@@ -692,31 +720,31 @@ async applyAllPassiveEffects() {
 
     // NEW: Process additional speeds (e.g., flying, swimming)
     if (effectData.grantsSpeedType && typeof effectData.grantsSpeedType === 'string' &&
-        typeof effectData.grantsSpeedValue === 'number' && !isNaN(effectData.grantsSpeedValue)) {
-      const type = effectData.grantsSpeedType.toLowerCase().trim(); // Padronizar o tipo
-      const value = effectData.grantsSpeedValue;
+    typeof effectData.grantsSpeedValue === 'number' && !isNaN(effectData.grantsSpeedValue)) {
+    const type = effectData.grantsSpeedType.toLowerCase().trim();
+    const value = effectData.grantsSpeedValue;
 
-      if (!this.settings.speed.additionalSpeeds[type]) {
-        this.settings.speed.additionalSpeeds[type] = {
-          type: type,
-          value: value,
-          sources: [sourcePath]
-        };
-        console.log(`Nova velocidade adicional concedida de ${sourcePath}: ${type} ${value}`);
-      } else {
-        const existingSpeed = this.settings.speed.additionalSpeeds[type];
-        if (value > existingSpeed.value) {
-          existingSpeed.value = value;
-          console.log(`Velocidade adicional ${type} atualizada de ${sourcePath}: ${value} (era ${existingSpeed.value})`);
-        }
-        if (!existingSpeed.sources.includes(sourcePath)) {
-          existingSpeed.sources.push(sourcePath);
-          console.log(`Fonte adicionada para velocidade adicional ${type}: ${sourcePath}`);
-        }
-      }
-    } else if (effectData.grantsSpeedType || effectData.grantsSpeedValue) {
-      console.warn(`Dados de velocidade adicional incompletos ou inválidos em: ${sourcePath}. Esperava 'grantsSpeedType' (string) e 'grantsSpeedValue' (number).`);
+   if (!this.settings.speed.additionalSpeeds[type]) {
+    this.settings.speed.additionalSpeeds[type] = {
+      type: type,
+      value: value,
+      sources: [sourcePath]
+    };
+    console.log(`Nova velocidade adicional concedida de ${sourcePath}: ${type} ${value}`);
+   } else {
+    const existingSpeed = this.settings.speed.additionalSpeeds[type];
+    // SUM the values instead of taking the max if it's a new source or just add to existing
+    existingSpeed.value += value; // MODIFIED: Sum the speed values
+    console.log(`Velocidade adicional ${type} aumentada de <span class="math-inline">\{sourcePath\}\: \+</span>{value} (total agora ${existingSpeed.value})`);
+    
+    if (!existingSpeed.sources.includes(sourcePath)) {
+      existingSpeed.sources.push(sourcePath);
+      console.log(`Fonte adicionada para velocidade adicional ${type}: ${sourcePath}`);
     }
+   }
+   } else if (effectData.grantsSpeedType || effectData.grantsSpeedValue) {
+    console.warn(`Dados de velocidade adicional incompletos ou inválidos em: ${sourcePath}. Esperava 'grantsSpeedType' (string) e 'grantsSpeedValue' (number).`);
+   }
 
     for (const [statKey, bonusValue] of Object.entries(effectData)) {
       if (statKey in accumulatedStatBonuses && typeof bonusValue === "number") {
@@ -740,6 +768,61 @@ async applyAllPassiveEffects() {
         }
       });
     }
+
+     // === Process Vision/Senses ===
+    // this.settings.vision e this.settings.vision.senses já foram inicializados no começo da função.
+    const processSense = (type: string, rangeKey: string, detailsKey?: string) => { // [cite: 132]
+        const range = effectData[rangeKey] as number | undefined; // [cite: 132]
+        if (typeof range === 'number' && range > 0) { // [cite: 133]
+            const details = detailsKey ? effectData[detailsKey] as string | undefined : undefined; // [cite: 133]
+            const lcType = type.toLowerCase().replace(/\s+/g, '_'); // Normalize type for key [cite: 134]
+
+            if (!this.settings.vision.senses[lcType]) { // [cite: 135]
+                this.settings.vision.senses[lcType] = {
+                    range: range, // [cite: 135]
+                    sources: [sourcePath], // [cite: 135]
+                    details: details // [cite: 135]
+                };
+            } else {
+                const currentSense = this.settings.vision.senses[lcType]; // [cite: 137]
+                currentSense.range += range; // Sum the ranges [cite: 138]
+
+                // Consolidate details: append if new and not already present
+                if (details) { // [cite: 138]
+                    if (!currentSense.details) { // [cite: 138]
+                        currentSense.details = details; // [cite: 139]
+                    } else if (!currentSense.details.toLowerCase().includes(details.toLowerCase())) { // Avoid adding if the same detail (case-insensitive) is already part of the string [cite: 140]
+                        currentSense.details += `; ${details}`; // [cite: 140]
+                    }
+                }
+
+                if (!currentSense.sources.includes(sourcePath)) { // [cite: 141]
+                    currentSense.sources.push(sourcePath); // [cite: 141]
+                }
+            }
+            // console.log(`Sense granted/updated from ${sourcePath}: ${type} ${range}ft` + (details ? ` (${details})` : '')); // [cite: 142]
+        }
+    };
+
+    // Call processSense for different vision types
+    if (effectData.grantsDarkvision) processSense("Darkvision", "grantsDarkvision"); // [cite: 143]
+    if (effectData.grantsBlindsightRange) processSense("Blindsight", "grantsBlindsightRange", "grantsBlindsightDetails"); // [cite: 144]
+    if (effectData.grantsTruesight) processSense("Truesight", "grantsTruesight"); // [cite: 144]
+    if (effectData.grantsTremorsense) processSense("Tremorsense", "grantsTremorsense"); // [cite: 144]
+
+    // Process generic senses (e.g., grantsSense_KeenSmell_Range, grantsSense_KeenSmell_Details)
+    for (const key in effectData) { // [cite: 145]
+        if (key.startsWith("grantsSense_") && key.endsWith("_Range")) { // [cite: 145]
+            const typeNameSubstring = key.substring("grantsSense_".length, key.length - "_Range".length); // [cite: 145]
+            const typeName = typeNameSubstring.replace(/_/g, ' '); // e.g., "Keen Smell" [cite: 146]
+            const detailsKeyGeneric = `grantsSense_${typeNameSubstring}_Details`; // Reconstruct the original key format for details [cite: 146]
+            processSense(typeName, key, detailsKeyGeneric); // [cite: 147]
+        }
+    }
+    // === FIM Process Vision/Senses ===
+
+    
+
 
     const processSkillLevel = (skillName: string, level: "proficient" | "expert") => {
       if (!this.settings.skillProficiencies[skillName]) {
@@ -991,6 +1074,23 @@ async applyAllPassiveEffects() {
     } else if (key === "grantsSpeedValue" && typeof value === "number") {
       result[key] = value;
     }
+    else if (key === "grantsDarkvision" && typeof value === "number") { // Example for darkvision
+            result[key] = value;
+        } else if (key === "grantsBlindsightRange" && typeof value === "number") { // Example for blindsight range
+            result[key] = value;
+        } else if (key === "grantsBlindsightDetails" && typeof value === "string") { // Example for blindsight details
+            result[key] = value;
+        } else if (key === "grantsTruesight" && typeof value === "number") {
+            result[key] = value;
+        } else if (key === "grantsTremorsense" && typeof value === "number") {
+            result[key] = value;
+        }
+        // Generic way to add other senses, e.g., grantsSense_KeenSmell_Range: 60, grantsSense_KeenSmell_Details: "Advantage on perception (smell)"
+        else if (key.startsWith("grantsSense_") && typeof value === "number" && key.endsWith("_Range")) {
+             result[key] = value;
+        } else if (key.startsWith("grantsSense_") && typeof value === "string" && key.endsWith("_Details")) {
+             result[key] = value;
+        }
     }
     return result;
   }
@@ -1671,6 +1771,12 @@ class StatsModal extends Modal {
         new SpeedModal(this.app, this.plugin).open();
       };
 
+      contentEl.createEl("button", { text: "🌌 View Vision & Senses", cls: "mod-cta" })
+    .onclick = () => {
+        this.close(); // Close the StatsModal
+        new VisionModal(this.app, this.plugin).open(); // Open the VisionModal
+    };
+
 	  contentEl.createEl("hr"); // Separator
 
     if (this.plugin.settings.characterNotePath) {
@@ -1989,6 +2095,14 @@ class HPManagementModal extends Modal {
     contentEl.createEl("p", {
       text: `🧪 HP Temporário: ${health.tempHP}`
     });
+
+    if (this.plugin.settings.healthModalNotePath) {
+    const openNoteBtn = contentEl.createEl("button", { text: "📘 Open Health Details Note" });
+    openNoteBtn.style.marginBottom = "10px"; // Or other appropriate styling
+    openNoteBtn.onclick = () => {
+        this.app.workspace.openLinkText(this.plugin.settings.healthModalNotePath!, '', false);
+    };
+    }
 
     // Mostrar o dado de HP
     const hpDice = new Dice(health.baseDie);
@@ -2714,6 +2828,20 @@ class SpeedModal extends Modal {
 
     contentEl.createEl("hr");
 
+    if (this.plugin.settings.speedModalNotePath) {
+    const openNoteBtn = contentEl.createEl("button", { text: `📘 Open Speed Details Note` });
+    // Consider placing it in the buttonContainer or separately
+    openNoteBtn.style.marginRight = "auto"; // To push it to the left if in a flex container
+    openNoteBtn.onclick = () => {
+        this.app.workspace.openLinkText(this.plugin.settings.speedModalNotePath!, '', false);
+    };
+    // Example: Add to a new div before buttonContainer
+    const topButtonContainer = contentEl.createDiv();
+    topButtonContainer.appendChild(openNoteBtn);
+    topButtonContainer.style.marginBottom = "10px";
+
+    }
+
     contentEl.createEl("h3", { text: "How to Add Speed" });
     contentEl.createEl("p", { text: "Speed is influenced by your active feats and effects. To add speed bonuses, create or modify your Feat or Effect notes with the following frontmatter properties:" });
 
@@ -2746,6 +2874,172 @@ grantsSpeedValue: 60
       this.close();
       new StatsModal(this.app, this.plugin).open();
     };
+
+    const manageEffectsButton = buttonContainer.createEl("button", { text: "Manage Effects" });
+    manageEffectsButton.onclick = () => {
+      this.close();
+      new EffectsModal(this.app, this.plugin).open();
+    };
+
+    const manageFeatsButton = buttonContainer.createEl("button", { text: "Manage Feats" });
+    manageFeatsButton.onclick = () => {
+      this.close();
+      new FeatsModal(this.app, this.plugin).open();
+    };
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+class VisionModal extends Modal {
+  plugin: RPGLevelsPlugin;
+
+  constructor(app: App, plugin: RPGLevelsPlugin) {
+    super(app);
+    this.plugin = plugin;
+  }
+
+  async onOpen() {
+  const { contentEl } = this;
+  contentEl.empty();
+  contentEl.createEl("h2", { text: "🌌 Character Vision & Senses" });
+
+  await this.plugin.applyAllPassiveEffects(); // Ensure all data is current
+  const visionData = this.plugin.settings.vision;
+  const stats = this.plugin.settings.characterStats;
+  const proficiencyBonus = this.plugin.settings.proficiencyBonus;
+  const skillProficienciesData = this.plugin.settings.skillProficiencies;
+  // Attempt to load skill definitions to ensure IDs are correct
+  // const loadedSkills = await this.plugin.loadSkillDefinitions(); // [cite: 50]
+
+  // --- Display Special Senses (Darkvision, Blindsight, etc.) ---
+  contentEl.createEl("h3", { text: "Special Senses" });
+  if (Object.keys(visionData.senses).length === 0) {
+    contentEl.createEl("p", { text: "No special vision or senses active." });
+  } else {
+    const ul = contentEl.createEl("ul");
+    for (const type in visionData.senses) { // [cite: 570]
+      const sense = visionData.senses[type]; // [cite: 571]
+      const senseDisplayName = type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()); // [cite: 571]
+
+      // Recalcula detailsText e sourcesText garantindo que usem os valores corretos
+      const detailsText = sense.details ? ` - ${sense.details}` : ''; // [cite: 573]
+      const sourcesText = (sense.sources && sense.sources.length > 0) ? // Adicionada verificação para sense.sources
+        ` (from: ${sense.sources.map(s => {
+          const file = this.app.vault.getAbstractFileByPath(s);
+          return file instanceof TFile ? file.basename : s; // [cite: 572]
+        }).join(', ')})` : '';
+
+      // Cria o elemento <li>
+      const li = ul.createEl("li");
+
+      // Adiciona o nome do sentido
+      li.appendText(`${senseDisplayName}: `);
+
+      // Cria e adiciona o <span> para o alcance
+      // Se a classe "math-inline" for apenas para estilização CSS, você pode adicioná-la.
+      // Se era uma tentativa de renderizar LaTeX, isso não funcionará diretamente aqui.
+      const rangeSpan = li.createEl("span");
+      // Se precisar da classe para CSS:
+      // rangeSpan.addClass("math-inline");
+      rangeSpan.setText(sense.range !== undefined ? `${sense.range} feet` : 'N/A feet');
+
+      // Adiciona os detalhes, se existirem
+      if (detailsText) {
+        li.appendText(detailsText);
+      }
+
+      // Adiciona as fontes, se existirem
+      if (sourcesText) {
+        li.appendText(sourcesText);
+      }
+    }
+  }
+  contentEl.createEl("hr");
+
+  // --- Display Passive Scores ---
+  contentEl.createEl("h3", { text: "Passive Scores" });
+    const passiveSkillsToDisplay = [
+        // skillId must match the basename of your skill notes (e.g., "Perception.md" -> "perception")
+        { name: "Passive Perception", skillId: "perception", baseAbility: "Wisdom" }, 
+        { name: "Passive Investigation", skillId: "investigation", baseAbility: "Intelligence" },
+        { name: "Passive Insight", skillId: "insight", baseAbility: "Wisdom" }
+    ];
+
+    const passiveScoresContainer = contentEl.createDiv();
+    // ...
+
+    for (const pSkill of passiveSkillsToDisplay) {
+        const baseAbilityScore = stats[pSkill.baseAbility as keyof CharacterStats]; // 1. Get base stat (e.g., Wisdom score)
+        // ... (check if baseAbilityScore is a number)
+        const abilityModifier = this.plugin.getAbilityModifier(baseAbilityScore); // 2. Calculate stat modifier (e.g., Wisdom modifier) [cite: 47]
+        
+        let skillBonus = abilityModifier; // Start with the ability modifier
+        const skillProfData = skillProficienciesData[pSkill.skillId]; // 3. Get proficiency data for the skill [cite: 32, 546]
+
+        if (skillProfData) { // If the character has any proficiency level in this skill
+            if (skillProfData.level === "proficient") {
+                skillBonus += proficiencyBonus; // Add proficiency bonus [cite: 547]
+            } else if (skillProfData.level === "expert") {
+                skillBonus += (proficiencyBonus * 2); // Add double proficiency bonus for expertise [cite: 549]
+            }
+        }
+        
+        const passiveScore = 10 + skillBonus; // 4. D&D Passive Score Calculation
+        passiveScoresContainer.createEl("p", { text: `🔎 ${pSkill.name}: ${passiveScore}` });
+    }
+
+  contentEl.createEl("hr");
+  // ... (rest of the modal: How to Add, Buttons, etc.) ...
+  // --- "How to Add Vision/Senses" Section ---
+     contentEl.createEl("h3", { text: "How to Add Vision/Senses" });
+     contentEl.createEl("p", { text: "Vision and senses are influenced by your active feats and effects. To add or modify them, create or edit your Feat or Effect notes with the following frontmatter properties:" });
+
+     const codeBlock = `---
+# Examples:
+grantsDarkvision: 60 # Adds 60ft to Darkvision range
+
+grantsBlindsightRange: 30
+grantsBlindsightDetails: "Cannot perceive color."
+
+grantsSense_Keen_Smell_Range: 60 
+grantsSense_Keen_Smell_Details: "Advantage on Wisdom (Perception) checks for smell."
+---`;
+     const pre = contentEl.createEl("pre");
+     // ... (styling for pre and code block as in previous response) ...
+     pre.style.whiteSpace = "pre-wrap";
+     pre.style.backgroundColor = "var(--background-secondary)";
+     pre.style.padding = "10px";
+     pre.style.borderRadius = "5px";
+     pre.style.fontFamily = "monospace";
+     pre.createEl("code", { text: codeBlock });
+
+     contentEl.createEl("p", { text: "Bonuses from different sources for the same sense type will be summed. After modifying notes, ensure the feat is obtained or the effect is active." });
+
+
+ // --- Representative Note Button ---
+ if (this.plugin.settings.visionModalNotePath) {
+     const openNoteBtn = contentEl.createEl("button", { text: `📘 Open Senses Details Note` });
+     openNoteBtn.style.marginRight = "10px"; // Add some spacing
+     openNoteBtn.onclick = () => {
+         this.app.workspace.openLinkText(this.plugin.settings.visionModalNotePath!, '', false);
+     };
+ }
+  // ... (Navigation buttons: Back to Stats, Manage Effects, Manage Feats)
+     const buttonContainer = contentEl.createDiv({ cls: "modal-button-container" });
+     buttonContainer.style.display = "flex";
+     buttonContainer.style.justifyContent = "flex-end";
+     buttonContainer.style.marginTop = "20px";
+     buttonContainer.style.gap = "10px";
+
+
+     const backButton = buttonContainer.createEl("button", { text: "Back to Stats" });
+     backButton.onclick = () => {
+       this.close();
+       new StatsModal(this.app, this.plugin).open();
+     };
 
     const manageEffectsButton = buttonContainer.createEl("button", { text: "Manage Effects" });
     manageEffectsButton.onclick = () => {
@@ -3789,7 +4083,39 @@ new Setting(containerEl)
           this.plugin.settings.speed.baseSpeed = parseInt(value) || 0;
           await this.plugin.saveSettings();
         }));
+  containerEl.createEl('h3', { text: 'Modal Representative Notes' });
+new Setting(containerEl)
+    .setName('Health Modal Note')
+    .setDesc("Path to a note to link from the Health modal (e.g., 'Journal/Health Log.md')")
+    .addText(text => text
+        .setPlaceholder("Path/To/HealthNote.md")
+        .setValue(this.plugin.settings.healthModalNotePath || "")
+        .onChange(async (value) => {
+            this.plugin.settings.healthModalNotePath = value.trim();
+            await this.plugin.saveSettings();
+        }));
 
+new Setting(containerEl)
+    .setName('Speed Modal Note')
+    .setDesc("Path to a note to link from the Speed modal (e.g., 'Character/Movement.md')")
+    .addText(text => text
+        .setPlaceholder("Path/To/SpeedNote.md")
+        .setValue(this.plugin.settings.speedModalNotePath || "")
+        .onChange(async (value) => {
+            this.plugin.settings.speedModalNotePath = value.trim();
+            await this.plugin.saveSettings();
+        }));
+
+new Setting(containerEl)
+    .setName('Vision & Senses Modal Note')
+    .setDesc("Path to a note to link from the Vision modal (e.g., 'Character/Senses.md')")
+    .addText(text => text
+        .setPlaceholder("Path/To/VisionNote.md")
+        .setValue(this.plugin.settings.visionModalNotePath || "")
+        .onChange(async (value) => {
+            this.plugin.settings.visionModalNotePath = value.trim();
+            await this.plugin.saveSettings();
+        }));
 
 }
 }

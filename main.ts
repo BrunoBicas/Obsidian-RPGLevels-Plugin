@@ -11,6 +11,11 @@ interface CharacterStats {
 	Charisma: number;
 }
 
+interface SpeedSettings {
+  baseSpeed: number;
+  additionalSpeeds: Record<string, { type: string; value: number; sources: string[] }>;
+}
+
 
 interface CharacterDefenses {
     resistances: { [damageType: string]: string[] }; // Fontes de resistência
@@ -26,6 +31,7 @@ interface EffectData {
   active: boolean;
   hpBonus?: number;
   tempHP?: number;
+  speedBonus?: number; // NEW: Speed bonus for effects and feats
   [key: string]: any;
 }
 
@@ -132,7 +138,11 @@ interface RPGLevelsSettings {
         }
     };
 	skillFolders: string[];
-}
+  speed: SpeedSettings;
+    // For future expansion:
+    // modifiers: { : number }; // e.g., "Boots of Speed": +10
+  };
+
 
 const DEFAULT_SETTINGS: RPGLevelsSettings = {
 	currentXP: 0,
@@ -180,7 +190,10 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
     skillProficiencies: {}, // Será populado por applyAllPassiveEffects
 	skillFolders: [],
 
-	
+	 speed: {
+    baseSpeed: 30, // Default walking speed
+    additionalSpeeds: {},
+  },
 
 
 	effectFolders: [],
@@ -386,10 +399,20 @@ export default class RPGLevelsPlugin extends Plugin {
 				new StatsModal(this.app, this).open();
 			}
 		});
+
+    this.addCommand({
+    id: 'view-rpg-speed',
+    name: 'View Character Speed',
+    callback: () => {
+      new SpeedModal(this.app, this).open();
+    }
+    });
 		
 		
 		// Add settings tab
 		this.addSettingTab(new RPGLevelsSettingTab(this.app, this));
+
+    
 		
 		// Initialize note count without awarding XP
 		try {
@@ -626,6 +649,9 @@ async applyAllPassiveEffects() {
         this.settings.defenses.immunities = {};
     }
     this.settings.skillProficiencies = {};
+    this.settings.speed.baseSpeed = 30; // Reset to default before applying bonuses
+    this.settings.speed.additionalSpeeds = {};
+
 
     const defaultSaveAbilities: (keyof CharacterStats)[] = ["Strength", "Dexterity", "Constitution", "Intelligence", "Wisdom", "Charisma"];
     defaultSaveAbilities.forEach(abilityName => {
@@ -651,82 +677,117 @@ async applyAllPassiveEffects() {
     ];
 
     // 4. ITERAR SOBRE AS FONTES E PROCESSAR SEUS DADOS
-    for (const sourcePath of allBonusSourcesPaths) {
-        const effectData = await this.loadEffectFromNote(sourcePath);
+  for (const sourcePath of allBonusSourcesPaths) {
+    const effectData = await this.loadEffectFromNote(sourcePath);
 
-        if (effectData.hpBonus) accumulatedFeatHpBonus += effectData.hpBonus;
-        if (effectData.tempHP) maxFeatTempHP = Math.max(maxFeatTempHP, effectData.tempHP);
+    if (effectData.hpBonus) accumulatedFeatHpBonus += effectData.hpBonus;
+    if (effectData.tempHP) maxFeatTempHP = Math.max(maxFeatTempHP, effectData.tempHP);
 
-        for (const [statKey, bonusValue] of Object.entries(effectData)) {
-            if (statKey in accumulatedStatBonuses && typeof bonusValue === "number") {
-                (accumulatedStatBonuses[statKey as keyof CharacterStats]! as number) += bonusValue;
-            }
-        }
-
-        if (effectData.grantsResistances && Array.isArray(effectData.grantsResistances)) {
-            effectData.grantsResistances.forEach(type => {
-                if (typeof type === 'string') {
-                    if (!this.settings.defenses.resistances[type]) this.settings.defenses.resistances[type] = [];
-                    if (!this.settings.defenses.resistances[type].includes(sourcePath)) this.settings.defenses.resistances[type].push(sourcePath);
-                }
-            });
-        }
-        if (effectData.grantsImmunities && Array.isArray(effectData.grantsImmunities)) {
-            effectData.grantsImmunities.forEach(type => {
-                if (typeof type === 'string') {
-                    if (!this.settings.defenses.immunities[type]) this.settings.defenses.immunities[type] = [];
-                    if (!this.settings.defenses.immunities[type].includes(sourcePath)) this.settings.defenses.immunities[type].push(sourcePath);
-                }
-            });
-        }
-        
-        const processSkillLevel = (skillName: string, level: "proficient" | "expert") => {
-            if (!this.settings.skillProficiencies[skillName]) {
-                this.settings.skillProficiencies[skillName] = { level: "none", sources: [] };
-            }
-            const current = this.settings.skillProficiencies[skillName];
-            if (level === "expert") current.level = "expert";
-            else if (level === "proficient" && current.level !== "expert") current.level = "proficient";
-            if (!current.sources.includes(sourcePath)) current.sources.push(sourcePath);
-        };
-        if (effectData.grantsSkillProficiency && Array.isArray(effectData.grantsSkillProficiency)) {
-            effectData.grantsSkillProficiency.forEach(skillName => {
-                if (typeof skillName === 'string') processSkillLevel(skillName, "proficient");
-            });
-        }
-        if (effectData.grantsSkillExpertise && Array.isArray(effectData.grantsSkillExpertise)) {
-            effectData.grantsSkillExpertise.forEach(skillName => {
-                if (typeof skillName === 'string') processSkillLevel(skillName, "expert");
-            });
-        }
-
-        const processSaveLevel = (abilityName: string, level: "proficient" | "expert") => {
-            const saveKey = `${abilityName.toLowerCase()}Save` as keyof typeof this.settings.proficiencies;
-            const current = this.settings.proficiencies[saveKey]; // Já foi inicializado no começo da função
-            if (level === "expert") {
-                current.level = "expert";
-            } else if (level === "proficient" && current.level !== "expert") {
-                current.level = "proficient";
-            }
-            if (!current.sources.includes(sourcePath)) {
-                current.sources.push(sourcePath);
-            }
-        };
-        if (effectData.grantsSaveProficiency && Array.isArray(effectData.grantsSaveProficiency)) {
-            effectData.grantsSaveProficiency.forEach(abilityName => {
-                if (typeof abilityName === 'string' && defaultSaveAbilities.includes(abilityName as keyof CharacterStats)) {
-                    processSaveLevel(abilityName, "proficient");
-                }
-            });
-        }
-        if (effectData.grantsSaveExpertise && Array.isArray(effectData.grantsSaveExpertise)) {
-            effectData.grantsSaveExpertise.forEach(abilityName => {
-                if (typeof abilityName === 'string' && defaultSaveAbilities.includes(abilityName as keyof CharacterStats)) {
-                    processSaveLevel(abilityName, "expert");
-                }
-            });
-        }
+    // INSERIR O CÓDIGO DE PROCESSAMENTO DE VELOCIDADE AQUI
+    // NEW: Process speed bonus
+    if (typeof effectData.speedBonus === 'number') {
+      this.settings.speed.baseSpeed += effectData.speedBonus;
+      console.log(`Bônus de velocidade base aplicado de ${sourcePath}: +${effectData.speedBonus}`);
     }
+
+    // NEW: Process additional speeds (e.g., flying, swimming)
+    if (effectData.grantsSpeedType && typeof effectData.grantsSpeedType === 'string' &&
+        typeof effectData.grantsSpeedValue === 'number' && !isNaN(effectData.grantsSpeedValue)) {
+      const type = effectData.grantsSpeedType.toLowerCase().trim(); // Padronizar o tipo
+      const value = effectData.grantsSpeedValue;
+
+      if (!this.settings.speed.additionalSpeeds[type]) {
+        this.settings.speed.additionalSpeeds[type] = {
+          type: type,
+          value: value,
+          sources: [sourcePath]
+        };
+        console.log(`Nova velocidade adicional concedida de ${sourcePath}: ${type} ${value}`);
+      } else {
+        const existingSpeed = this.settings.speed.additionalSpeeds[type];
+        if (value > existingSpeed.value) {
+          existingSpeed.value = value;
+          console.log(`Velocidade adicional ${type} atualizada de ${sourcePath}: ${value} (era ${existingSpeed.value})`);
+        }
+        if (!existingSpeed.sources.includes(sourcePath)) {
+          existingSpeed.sources.push(sourcePath);
+          console.log(`Fonte adicionada para velocidade adicional ${type}: ${sourcePath}`);
+        }
+      }
+    } else if (effectData.grantsSpeedType || effectData.grantsSpeedValue) {
+      console.warn(`Dados de velocidade adicional incompletos ou inválidos em: ${sourcePath}. Esperava 'grantsSpeedType' (string) e 'grantsSpeedValue' (number).`);
+    }
+
+    for (const [statKey, bonusValue] of Object.entries(effectData)) {
+      if (statKey in accumulatedStatBonuses && typeof bonusValue === "number") {
+        (accumulatedStatBonuses[statKey as keyof CharacterStats]! as number) += bonusValue;
+      }
+    }
+
+    if (effectData.grantsResistances && Array.isArray(effectData.grantsResistances)) {
+      effectData.grantsResistances.forEach(type => {
+        if (typeof type === 'string') {
+          if (!this.settings.defenses.resistances[type]) this.settings.defenses.resistances[type] = [];
+          if (!this.settings.defenses.resistances[type].includes(sourcePath)) this.settings.defenses.resistances[type].push(sourcePath);
+        }
+      });
+    }
+    if (effectData.grantsImmunities && Array.isArray(effectData.grantsImmunities)) {
+      effectData.grantsImmunities.forEach(type => {
+        if (typeof type === 'string') {
+          if (!this.settings.defenses.immunities[type]) this.settings.defenses.immunities[type] = [];
+          if (!this.settings.defenses.immunities[type].includes(sourcePath)) this.settings.defenses.immunities[type].push(sourcePath);
+        }
+      });
+    }
+
+    const processSkillLevel = (skillName: string, level: "proficient" | "expert") => {
+      if (!this.settings.skillProficiencies[skillName]) {
+        this.settings.skillProficiencies[skillName] = { level: "none", sources: [] };
+      }
+      const current = this.settings.skillProficiencies[skillName];
+      if (level === "expert") current.level = "expert";
+      else if (level === "proficient" && current.level !== "expert") current.level = "proficient";
+      if (!current.sources.includes(sourcePath)) current.sources.push(sourcePath);
+    };
+    if (effectData.grantsSkillProficiency && Array.isArray(effectData.grantsSkillProficiency)) {
+      effectData.grantsSkillProficiency.forEach(skillName => {
+        if (typeof skillName === 'string') processSkillLevel(skillName, "proficient");
+      });
+    }
+    if (effectData.grantsSkillExpertise && Array.isArray(effectData.grantsSkillExpertise)) {
+      effectData.grantsSkillExpertise.forEach(skillName => {
+        if (typeof skillName === 'string') processSkillLevel(skillName, "expert");
+      });
+    }
+
+    const processSaveLevel = (abilityName: string, level: "proficient" | "expert") => {
+      const saveKey = `${abilityName.toLowerCase()}Save` as keyof typeof this.settings.proficiencies;
+      const current = this.settings.proficiencies[saveKey]; // Já foi inicializado no começo da função
+      if (level === "expert") {
+        current.level = "expert";
+      } else if (level === "proficient" && current.level !== "expert") {
+        current.level = "proficient";
+      }
+      if (!current.sources.includes(sourcePath)) {
+        current.sources.push(sourcePath);
+      }
+    };
+    if (effectData.grantsSaveProficiency && Array.isArray(effectData.grantsSaveProficiency)) {
+      effectData.grantsSaveProficiency.forEach(abilityName => {
+        if (typeof abilityName === 'string' && defaultSaveAbilities.includes(abilityName as keyof CharacterStats)) {
+          processSaveLevel(abilityName, "proficient");
+        }
+      });
+    }
+    if (effectData.grantsSaveExpertise && Array.isArray(effectData.grantsSaveExpertise)) {
+      effectData.grantsSaveExpertise.forEach(abilityName => {
+        if (typeof abilityName === 'string' && defaultSaveAbilities.includes(abilityName as keyof CharacterStats)) {
+          processSaveLevel(abilityName, "expert");
+        }
+      });
+    }
+  }
 
     // 5. CALCULAR ATRIBUTOS FINAIS
     const statIncreaseFromLevel = Math.floor(this.settings.level / 4);
@@ -920,6 +981,16 @@ async applyAllPassiveEffects() {
         else if (key === "permanent" && typeof value === "boolean") {
             result[key] = value;
         }
+        // NEW: Load speedBonus
+    else if (key === "speedBonus" && typeof value === "number") {
+      result[key] = value;
+    }
+    // NEW: Load additional speed types (e.g., grantsSpeedType: "flying", grantsSpeedValue: 60)
+    else if (key === "grantsSpeedType" && typeof value === "string") {
+      result[key] = value;
+    } else if (key === "grantsSpeedValue" && typeof value === "number") {
+      result[key] = value;
+    }
     }
     return result;
   }
@@ -1592,6 +1663,12 @@ class StatsModal extends Modal {
       .onclick = () => {
         this.close(); // Fecha o StatsModal atual
         new DefensesModal(this.app, this.plugin).open(); // Abre o DefensesModal
+      };
+
+      contentEl.createEl("button", { text: "👟 View Speed", cls: "mod-cta" })
+      .onclick = () => {
+        this.close();
+        new SpeedModal(this.app, this.plugin).open();
       };
 
 	  contentEl.createEl("hr"); // Separator
@@ -2599,7 +2676,95 @@ class DefensesModal extends Modal {
   }
 }
 
-// [[ NO SEU ARQUIVO main.ts (ou 10.txt), ATUALIZE A CLASSE AbilitiesModal ]]
+class SpeedModal extends Modal {
+  plugin: RPGLevelsPlugin;
+
+  constructor(app: App, plugin: RPGLevelsPlugin) {
+    super(app);
+    this.plugin = plugin;
+  }
+
+  async onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", { text: "Character Speed" });
+
+    // Ensure passive effects are applied to get the latest speed values
+    await this.plugin.applyAllPassiveEffects();
+
+    const speedData = this.plugin.settings.speed;
+
+    contentEl.createEl("h3", { text: "Base Speed (Walking)" });
+    contentEl.createEl("p", { text: `${speedData.baseSpeed} feet` });
+
+    contentEl.createEl("h3", { text: "Additional Speeds" });
+    if (Object.keys(speedData.additionalSpeeds).length === 0) {
+      contentEl.createEl("p", { text: "No additional speeds." });
+    } else {
+      const ul = contentEl.createEl("ul");
+      for (const type in speedData.additionalSpeeds) {
+        const speed = speedData.additionalSpeeds[type];
+        const sourcesText = speed.sources.length > 0 ? ` (from: ${speed.sources.map(s => {
+        const file = this.app.vault.getAbstractFileByPath(s);
+         return file instanceof TFile ? file.basename : s;
+         }).join(', ')})` : '';
+        ul.createEl("li", { text: `${type}: ${speed.value} feet${sourcesText}` });
+      }
+    }
+
+    contentEl.createEl("hr");
+
+    contentEl.createEl("h3", { text: "How to Add Speed" });
+    contentEl.createEl("p", { text: "Speed is influenced by your active feats and effects. To add speed bonuses, create or modify your Feat or Effect notes with the following frontmatter properties:" });
+
+    const codeBlock = `---
+// For a flat bonus to your base speed:
+speedBonus: 5
+
+// For an additional speed type (e.g., flying, swimming):
+grantsSpeedType: "flying"
+grantsSpeedValue: 60
+---`;
+    const pre = contentEl.createEl("pre");
+    pre.style.whiteSpace = "pre-wrap";
+    pre.style.backgroundColor = "var(--background-secondary)";
+    pre.style.padding = "10px";
+    pre.style.borderRadius = "5px";
+    pre.style.fontFamily = "monospace";
+    pre.createEl("code", { text: codeBlock });
+
+    contentEl.createEl("p", { text: "After modifying notes, apply/re-apply them in the 'Manage Feats' or 'Effects' modals to update your speed." });
+
+    // Add buttons to go back to Stats or open Feats/Effects for convenience
+    const buttonContainer = contentEl.createDiv({ cls: "modal-button-container" });
+    buttonContainer.style.display = "flex";
+    buttonContainer.style.justifyContent = "flex-end";
+    buttonContainer.style.marginTop = "20px";
+
+    const backButton = buttonContainer.createEl("button", { text: "Back to Stats" });
+    backButton.onclick = () => {
+      this.close();
+      new StatsModal(this.app, this.plugin).open();
+    };
+
+    const manageEffectsButton = buttonContainer.createEl("button", { text: "Manage Effects" });
+    manageEffectsButton.onclick = () => {
+      this.close();
+      new EffectsModal(this.app, this.plugin).open();
+    };
+
+    const manageFeatsButton = buttonContainer.createEl("button", { text: "Manage Feats" });
+    manageFeatsButton.onclick = () => {
+      this.close();
+      new FeatsModal(this.app, this.plugin).open();
+    };
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
 
 class AbilitiesModal extends Modal {
     plugin: RPGLevelsPlugin;
@@ -3612,6 +3777,17 @@ new Setting(containerEl)
             this.plugin.settings.skillFolders = value.split(",").map(f => f.trim()).filter(f => f.length > 0);
             await this.plugin.saveSettings();
             await this.plugin.applyAllPassiveEffects(); // Para recarregar skills e suas proficiências
+        }));
+
+        new Setting(containerEl)
+      .setName('Base Speed')
+      .setDesc('Your character\'s base movement speed.')
+      .addText(text => text
+        .setPlaceholder('30')
+        .setValue(String(this.plugin.settings.speed.baseSpeed))
+        .onChange(async (value) => {
+          this.plugin.settings.speed.baseSpeed = parseInt(value) || 0;
+          await this.plugin.saveSettings();
         }));
 
 

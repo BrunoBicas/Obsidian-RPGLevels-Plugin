@@ -3256,7 +3256,37 @@ class QuestModal extends Modal {
 			}
 
 			questEl.createEl("h3", { text: quest.title });
-			questEl.createEl("p", { text: quest.description });
+			questEl.createEl("p", { text: quest.description });      
+      
+      const rewardsContainer = questEl.createDiv({cls: 'rewards-container'});
+            rewardsContainer.createEl("p", { text: `XP: ${quest.xpReward}` });
+
+
+            // === LÓGICA PARA EXIBIR RECOMPENSAS CUSTOMIZADAS DO YAML ===
+            const notePathForYAML = this.plugin.settings.questNoteLinks?.[id];
+            if (notePathForYAML) {
+                const file = this.app.vault.getAbstractFileByPath(notePathForYAML);
+                if (file instanceof TFile) {
+                    const fileCache = this.app.metadataCache.getFileCache(file);
+                    // A chave no YAML será 'custom_rewards'
+                    if (fileCache?.frontmatter && fileCache.frontmatter.custom_rewards) {
+                        const customRewards = fileCache.frontmatter.custom_rewards;
+                        if (Array.isArray(customRewards) && customRewards.length > 0) {
+                            const customRewardsP = rewardsContainer.createEl("p");
+                            customRewardsP.appendText("Outras Recompensas (da nota):");
+                            const rewardsUl = rewardsContainer.createEl("ul");
+                            customRewards.forEach(rewardText => {
+                                if (typeof rewardText === 'string') {
+                                    const rewardLi = rewardsUl.createEl("li");
+                                    // Usar MarkdownRenderer para que links como [[Item]] funcionem
+                                    MarkdownRenderer.renderMarkdown(rewardText, rewardLi, notePathForYAML, this.plugin);
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+     
 
 			// Container para os botões
 			const buttonsDiv = questEl.createDiv();
@@ -3278,7 +3308,19 @@ class QuestModal extends Modal {
 				}
 
 				this.plugin.saveSettings();
-				this.close();
+
+        const notePath = this.plugin.settings.questNoteLinks?.[id]; // [cite: 660]
+        const eventData = { 
+        questId: id,
+        questTitle: quest.title,
+        xpReward: quest.xpReward,
+        notePath: notePath // Pode ser undefined se não houver nota associada
+        };
+        // Disparar o evento no workspace
+        this.app.workspace.trigger('rpg-levels:quest-completed', eventData);
+        new Notice(`Sinal 'rpg-levels:quest-completed' emitido para: ${quest.title}`); // Opcional: para depuração
+			
+        this.close();
 			};
 
 			// Botão Abrir Nota se existir configuração
@@ -3800,6 +3842,7 @@ new Setting(containerEl)
 				completed: false,
 				lastCompleted: ''
 			};
+      let newQuestNotePath = '';
 			
 			new Setting(questForm)
 				.setName('Quest Title')
@@ -3882,8 +3925,15 @@ new Setting(questForm)
 				updateRangeField();
 			});
 	});
-	
-			
+
+  new Setting(questForm)
+    .setName('Associated Note Path (Optional)')
+    .setDesc("Path to the quest note (e.g., Quests/MyAdventure.md).")
+    .addText(text => text
+        .setPlaceholder('Quests/QuestName')
+        .onChange(value => {
+            newQuestNotePath = value.trim();
+        }));
 			
 			new Setting(questForm)
 				.addButton(button => button
@@ -3900,6 +3950,13 @@ new Setting(questForm)
 						
 						// Add to settings
 						this.plugin.settings.quests[questId] = newQuest;
+
+            if (newQuestNotePath && newQuestNotePath.trim() !== "") {
+							if (!this.plugin.settings.questNoteLinks) {
+								this.plugin.settings.questNoteLinks = {};
+							}
+							this.plugin.settings.questNoteLinks[questId] = newQuestNotePath.trim();
+						}
 						await this.plugin.saveSettings();
 						
 						// Reset form and refresh
@@ -3912,6 +3969,7 @@ new Setting(questForm)
 							completed: false,
 							lastCompleted: ''
 						};
+            newQuestNotePath = '';
 						
 						// Refresh the settings panel
 						this.display();

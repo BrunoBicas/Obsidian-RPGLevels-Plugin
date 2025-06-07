@@ -117,6 +117,13 @@ interface RPGLevelsSettings {
   healthModalNotePath?: string; // NEW
   speedModalNotePath?: string;   // NEW
   visionModalNotePath?: string;  // NEW
+
+  // NEW: Class and Subclass settings
+  class?: string; // Path to the class note
+  subclass?: string; // Path to the subclass note
+  classFolders: string[];
+  subclassFolders: string[];
+  
  
 
 	quests: {
@@ -221,6 +228,12 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
   healthModalNotePath: '',   // NEW
   speedModalNotePath: '',    // NEW
   visionModalNotePath: '',   // NEW
+
+  // NEW: Default settings for class/subclass
+    class: '',
+    subclass: '',
+    classFolders: [],
+    subclassFolders: [],
 
 
 	effectFolders: [],
@@ -659,7 +672,53 @@ export default class RPGLevelsPlugin extends Plugin {
   }
 
   return effects;
- }
+}
+
+async loadEffectDataWithLevels(path: string, characterLevel: number): Promise<any> {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) return {};
+
+    const metadata = this.app.metadataCache.getFileCache(file)?.frontmatter;
+    if (!metadata) return {};
+
+    const combinedBonuses: { [key: string]: any } = {};
+
+    // Itera por TODAS as chaves no frontmatter
+    for (const [key, value] of Object.entries(metadata)) {
+        // Verifica se a chave é um bônus de nível (ex: "lvl1", "lvl5")
+        const levelMatch = key.match(/^lvl(\d+)$/);
+
+        if (levelMatch) {
+            const featureLevel = parseInt(levelMatch[1], 10);
+            // Se o nível do personagem for suficiente para desbloquear a característica
+            if (characterLevel >= featureLevel && typeof value === 'object' && value !== null) {
+                // Adiciona os bônus desta característica ao objeto combinado
+                for (const [bonusKey, bonusValue] of Object.entries(value)) {
+                    // Ignora chaves que não são bônus diretos
+                    if (bonusKey === 'description' || bonusKey === 'classEffect') continue;
+
+                    if (typeof bonusValue === 'number') {
+                        combinedBonuses[bonusKey] = (combinedBonuses[bonusKey] || 0) + bonusValue;
+                    } else if (Array.isArray(bonusValue)) {
+                        combinedBonuses[bonusKey] = [...(combinedBonuses[bonusKey] || []), ...bonusValue];
+                    } else {
+                        combinedBonuses[bonusKey] = bonusValue;
+                    }
+                }
+            }
+        } 
+        // Adiciona bônus que não são de nível (os bônus base)
+        else if (!key.match(/^lvl\d+$/)) {
+             if (typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean') {
+                combinedBonuses[key] = value;
+            } else if (Array.isArray(value)) {
+                combinedBonuses[key] = [...(combinedBonuses[key] || []), ...value];
+            }
+        }
+    }
+
+    return combinedBonuses;
+}
 
 async applyAllPassiveEffects() {
     // 1. INICIALIZAÇÃO DE VALORES BASE E ACUMULADORES
@@ -704,12 +763,29 @@ async applyAllPassiveEffects() {
             .map(effect => effect.notePath)
     ];
 
+    // NEW: Add selected class and subclass to the sources if they exist
+    if (this.settings.class) {
+        allBonusSourcesPaths.push(this.settings.class);
+    }
+    if (this.settings.subclass) {
+        allBonusSourcesPaths.push(this.settings.subclass);
+    }
+
     // 4. ITERAR SOBRE AS FONTES E PROCESSAR SEUS DADOS
   for (const sourcePath of allBonusSourcesPaths) {
     const effectData = await this.loadEffectFromNote(sourcePath);
 
     if (effectData.hpBonus) accumulatedFeatHpBonus += effectData.hpBonus;
     if (effectData.tempHP) maxFeatTempHP = Math.max(maxFeatTempHP, effectData.tempHP);
+    if (effectData.grantsFeatPoints) accumulatedFeatHpBonus += effectData.grantsFeatPoints;
+
+    // Stat bonuses
+        for (const statKey in statsBase) {
+            if (effectData[statKey] && typeof effectData[statKey] === "number") {
+                accumulatedStatBonuses[statKey as keyof CharacterStats] = (accumulatedStatBonuses[statKey as keyof CharacterStats] || 0) + (effectData[statKey] as number);
+            }
+        }
+
 
     // INSERIR O CÓDIGO DE PROCESSAMENTO DE VELOCIDADE AQUI
     // NEW: Process speed bonus
@@ -823,6 +899,8 @@ async applyAllPassiveEffects() {
 
     
 
+    
+
 
     const processSkillLevel = (skillName: string, level: "proficient" | "expert") => {
       if (!this.settings.skillProficiencies[skillName]) {
@@ -883,6 +961,11 @@ async applyAllPassiveEffects() {
             (accumulatedStatBonuses[statKey] ?? 0);
     }
     this.settings.characterStats = finalCharacterStats;
+    const featLevels = [4, 8, 12, 16, 19]; // Example D&D ASI levels
+    let pointsFromLevels = featLevels.filter(l => l <= this.settings.level).length;
+    this.settings.featPoints = pointsFromLevels + accumulatedFeatHpBonus - (this.settings.spentFeatPoints?.feats?.length || 0) - Object.values(this.settings.spentFeatPoints?.statIncreases || {}).reduce((a, b) => a + b, 0);
+
+
 
     // 6. CALCULAR HP E TEMP HP FINAL
     // Garante que hpPerLevel tenha entradas suficientes
@@ -1586,48 +1669,96 @@ class EffectsModal extends Modal {
     contentEl.createEl("hr");
 
     // === Seção de Adição de Efeitos (com pastas recolhíveis) ===
-    const currentActiveEffectPaths = Object.values(activeEffectsFromSettings).map(e => e.notePath); // [cite: 176]
+    const currentActiveEffectPaths = Object.values(activeEffectsFromSettings).map(e => e.notePath);
 
-    // --- Efeitos Únicos Disponíveis ---
-    contentEl.createEl("h3", { text: "Efeitos Únicos Disponíveis (por Pasta)" }); // [cite: 175]
-    if (this.plugin.settings.effectFolders.length === 0) {
-        contentEl.createEl("p", {text: "Nenhuma pasta de efeitos únicos configurada nas settings."});
-    }
-    this.plugin.settings.effectFolders.forEach(folderPath => { // Adaptado de [cite: 360]
-        const folderDetails = contentEl.createEl("details");
-        folderDetails.createEl("summary", { text: folderPath });
-        // Usando o novo método da classe principal
-        const effectsInFolder = this.plugin.getEffectsFromSpecificFolder(folderPath, currentActiveEffectPaths, false);
-        
-        if (effectsInFolder.length === 0) { // [cite: 177]
-            folderDetails.createEl("p", { text: "Nenhum efeito único novo disponível nesta pasta." }); // Parcialmente de [cite: 177]
-        } else {
-            effectsInFolder.forEach(effectFile => { // Adaptado de [cite: 178]
-                this.renderEffectEntry(folderDetails, effectFile.path, false); // Passa false para isRepeatable
-            });
+    // --- Lógica para buscar TODOS os efeitos disponíveis ---
+    const availableEffects = {
+        unique: [] as TFile[],
+        repeatable: [] as TFile[],
+        classEffects: [] as TFile[] // NOVA lista para efeitos de classe
+    };
+
+    // 1. Efeitos das pastas de settings
+    this.plugin.settings.effectFolders.forEach(folderPath => {
+        const folder = this.app.vault.getAbstractFileByPath(folderPath);
+        if (folder instanceof TFolder) {
+            for (const file of folder.children) {
+                if (file instanceof TFile && file.extension === "md" && !currentActiveEffectPaths.includes(file.path)) {
+                    availableEffects.unique.push(file);
+                }
+            }
+        }
+    });
+    this.plugin.settings.repeatableEffectFolders.forEach(folderPath => {
+        const folder = this.app.vault.getAbstractFileByPath(folderPath);
+        if (folder instanceof TFolder) {
+            for (const file of folder.children) {
+                if (file instanceof TFile && file.extension === "md") {
+                    availableEffects.repeatable.push(file);
+                }
+            }
         }
     });
 
-    // --- Efeitos Repetíveis Disponíveis ---
-    contentEl.createEl("h3", { text: "Efeitos Repetíveis Disponíveis (por Pasta)" }); // [cite: 179]
-    if (this.plugin.settings.repeatableEffectFolders.length === 0) {
-        contentEl.createEl("p", {text: "Nenhuma pasta de efeitos repetíveis configurada nas settings."}); // [cite: 180]
-    }
-    this.plugin.settings.repeatableEffectFolders.forEach(folderPath => { // Adaptado de [cite: 363]
-        const folderDetails = contentEl.createEl("details");
-        folderDetails.createEl("summary", { text: folderPath });
-        // Para repetíveis, não excluímos com base nos ativos
-        const effectsInFolder = this.plugin.getEffectsFromSpecificFolder(folderPath, [], true);
-        
-        if (effectsInFolder.length === 0) { // [cite: 180]
-            folderDetails.createEl("p", { text: "Nenhum efeito repetível disponível nesta pasta." }); // [cite: 180]
-        } else {
-            effectsInFolder.forEach(effectFile => { // Adaptado de [cite: 181]
-                this.renderEffectEntry(folderDetails, effectFile.path, true); // Passa true para isRepeatable
-            });
+    // 2. NOVA LÓGICA: Buscar efeitos da Classe e Subclasse
+    const classSources = [this.plugin.settings.class, this.plugin.settings.subclass].filter(Boolean) as string[];
+    for (const sourcePath of classSources) {
+        const file = this.app.vault.getAbstractFileByPath(sourcePath);
+        if (file instanceof TFile) {
+            const metadata = this.app.metadataCache.getFileCache(file)?.frontmatter;
+            if (metadata) {
+                for (const key in metadata) {
+                    const levelMatch = key.match(/^lvl(\d+)$/);
+                    if (levelMatch) {
+                        const featureLevel = parseInt(levelMatch[1], 10);
+                        if (this.plugin.settings.level >= featureLevel) {
+                            const featureData = metadata[key];
+                            if (featureData && typeof featureData.classEffect === 'string') {
+                                const effectFile = this.app.vault.getAbstractFileByPath(featureData.classEffect);
+                                if (effectFile instanceof TFile && !currentActiveEffectPaths.includes(effectFile.path)) {
+                                    availableEffects.classEffects.push(effectFile);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
-    });
-  }
+    }
+
+    // --- Renderização dos Efeitos Disponíveis ---
+    
+    // Efeitos de Classe (NOVO)
+    contentEl.createEl("h3", { text: "Habilidades de Classe Disponíveis" });
+    if (availableEffects.classEffects.length === 0) {
+        contentEl.createEl("p", {text: "Nenhuma habilidade de classe ativa ou disponível no seu nível atual."});
+    } else {
+        const uniqueClassEffects = [...new Map(availableEffects.classEffects.map(item => [item.path, item])).values()];
+        uniqueClassEffects.forEach(effectFile => {
+            this.renderEffectEntry(contentEl, effectFile.path, false); // Trata como efeito único
+        });
+    }
+
+    // Efeitos Únicos
+    contentEl.createEl("h3", { text: "Efeitos Únicos Disponíveis" });
+    if (availableEffects.unique.length === 0) {
+        contentEl.createEl("p", {text: "Nenhum efeito único novo disponível."});
+    } else {
+         availableEffects.unique.forEach(effectFile => {
+            this.renderEffectEntry(contentEl, effectFile.path, false);
+        });
+    }
+    
+    // Efeitos Repetíveis
+    contentEl.createEl("h3", { text: "Efeitos Repetíveis Disponíveis" });
+     if (availableEffects.repeatable.length === 0) {
+        contentEl.createEl("p", {text: "Nenhum efeito repetível disponível."});
+    } else {
+        availableEffects.repeatable.forEach(effectFile => {
+            this.renderEffectEntry(contentEl, effectFile.path, true);
+        });
+    }
+}
 
   renderEffectEntry(parentElement: HTMLElement, path: string, isRepeatable: boolean) {
     // 'isRepeatable' pode ser usado para lógicas futuras, mas não é usado ativamente aqui
@@ -1743,39 +1874,65 @@ class StatsModal extends Modal {
       }
     } 
 
+    const health = this.plugin.settings.health;
+ contentEl.createEl("h3", { text: "❤️ Health" });
+ contentEl.createEl("p", {
+  text: `HP: ${health.currentHP}/${health.maxHP} + (${health.tempHP} Temp)`
+ });
+
+ let featHpBonus = 0;
+ let featTempHP = 0;
+
+ for (const path of this.plugin.settings.obtainedFeats) {
+  const data = await this.plugin.loadEffectFromNote(path);
+  if (data.hpBonus) featHpBonus += data.hpBonus;
+  if (data.tempHP) featTempHP = Math.max(featTempHP, data.tempHP);
+ }
+
+ this.plugin.settings.health.maxHP += featHpBonus;
+ this.plugin.settings.health.tempHP = Math.max(this.plugin.settings.health.tempHP, featTempHP);
+ await this.plugin.saveSettings();
+
+    // --- Character Title (Level, Class, Subclass) ---
+    const classBaseName = this.plugin.settings.class ? this.plugin.settings.class.split('/').pop()?.replace('.md', '') : 'Adventurer';
+    const subClassBaseName = this.plugin.settings.subclass ? ` / ${this.plugin.settings.subclass.split('/').pop()?.replace('.md', '')}` : '';
+    contentEl.createEl("h2", { text: `Level ${this.plugin.settings.level} ${classBaseName}${subClassBaseName}` });
+    contentEl.createEl("p", { text: `(Proficiency Bonus: +${proficiencyBonus})`, cls: "setting-item-description", attr: { style: 'text-align: center; margin-top: -10px; margin-bottom: 15px;' }});
+
+    // --- Management Buttons ---
+    const buttonContainer = contentEl.createDiv({ cls: "modal-button-container" });
+    buttonContainer.style.display = 'flex';
+    buttonContainer.style.flexWrap = 'wrap';
+    buttonContainer.style.gap = '10px';
+    buttonContainer.style.justifyContent = 'center';
+    buttonContainer.style.marginBottom = '15px';
+
+    const createButton = (text: string, onClick: () => void) => {
+        buttonContainer.createEl("button", { text, cls: "mod-cta" }).onclick = () => {
+            this.close();
+            onClick();
+        };
+    };
+
+    createButton("🎓 Manage Class", () => new SelectionModal(this.app, this.plugin, 'Class').open());
+    createButton("✨ Manage Subclass", () => new SelectionModal(this.app, this.plugin, 'Subclass').open());
+    createButton("🧠 Manage Feats", () => new FeatsModal(this.app, this.plugin).open());
+    createButton("🌀 Manage Effects", () => new EffectsModal(this.app, this.plugin).open());
+    createButton("❤️ Manage HP", () => new HPManagementModal(this.app, this.plugin).open());
+    createButton("🛡️ View Defenses", () => new DefensesModal(this.app, this.plugin).open());
+    createButton("👟 View Speed", () => new SpeedModal(this.app, this.plugin).open());
+    createButton("🌌 View Vision", () => new VisionModal(this.app, this.plugin).open());
+    createButton("💪 Abilities & Rolls", () => new AbilitiesModal(this.app, this.plugin).open());
+    createButton("📜 Manage Quests", () => new QuestModal(this.app, this.plugin).open());
+
+
+ 
+
     // Resto do conteúdo do modal
     const level = this.plugin.settings.level;
     contentEl.createEl("h3", { text: `Feat Points disponíveis: ${this.plugin.settings.featPoints ?? 0}` });
 
-    contentEl.createEl("button", { text: "Manage Quests", cls: "mod-cta" })
-      .onclick = () => {
-        this.close();
-        new QuestModal(this.app, this.plugin).open();
-      };
-
-    contentEl.createEl("button", { text: "Manage Feats", cls: "mod-cta" })
-      .onclick = () => {
-        this.close();
-        new FeatsModal(this.app, this.plugin).open();
-      };
-
-	  contentEl.createEl("button", { text: "🛡️ View Defenses", cls: "mod-cta" })
-      .onclick = () => {
-        this.close(); // Fecha o StatsModal atual
-        new DefensesModal(this.app, this.plugin).open(); // Abre o DefensesModal
-      };
-
-      contentEl.createEl("button", { text: "👟 View Speed", cls: "mod-cta" })
-      .onclick = () => {
-        this.close();
-        new SpeedModal(this.app, this.plugin).open();
-      };
-
-      contentEl.createEl("button", { text: "🌌 View Vision & Senses", cls: "mod-cta" })
-    .onclick = () => {
-        this.close(); // Close the StatsModal
-        new VisionModal(this.app, this.plugin).open(); // Open the VisionModal
-    };
+    
 
 	  contentEl.createEl("hr"); // Separator
 
@@ -1934,34 +2091,6 @@ featBtn.onclick = () => {
   }(this.app, plugin, parentModal).open();
 };
 
-
-	contentEl.createEl("button", {
-  text: "❤️ Gerenciar HP",
-  cls: "mod-cta"
-}).onclick = () => {
-  this.close();
-  new HPManagementModal(this.app, this.plugin).open();
-};
-
-
- const health = this.plugin.settings.health;
- contentEl.createEl("h3", { text: "❤️ Health" });
- contentEl.createEl("p", {
-  text: `HP: ${health.currentHP}/${health.maxHP} + (${health.tempHP} Temp)`
- });
-
- let featHpBonus = 0;
-let featTempHP = 0;
-
-for (const path of this.plugin.settings.obtainedFeats) {
-  const data = await this.plugin.loadEffectFromNote(path);
-  if (data.hpBonus) featHpBonus += data.hpBonus;
-  if (data.tempHP) featTempHP = Math.max(featTempHP, data.tempHP);
-}
-
-this.plugin.settings.health.maxHP += featHpBonus;
-this.plugin.settings.health.tempHP = Math.max(this.plugin.settings.health.tempHP, featTempHP);
-await this.plugin.saveSettings();
 
 
 	  	contentEl.createEl("button", {
@@ -3516,6 +3645,154 @@ const ObsidianHelper = {
 	}
 };
 
+class SelectionModal extends Modal {
+    plugin: RPGLevelsPlugin;
+    itemType: 'Class' | 'Subclass';
+    
+    private allItemsFromFoldersCache: TFile[];
+    private availableItemsContainer: HTMLElement;
+    private searchInputEl: HTMLInputElement;
+
+    // These getters dynamically access the correct settings based on the itemType
+    private get settingKey(): 'class' | 'subclass' {
+        return this.itemType.toLowerCase() as 'class' | 'subclass';
+    }
+    private get folderSettingKey(): 'classFolders' | 'subclassFolders' {
+        return (this.settingKey + 'Folders') as 'classFolders' | 'subclassFolders';
+    }
+    private get currentItemPath(): string | undefined {
+        return this.plugin.settings[this.settingKey];
+    }
+    private set currentItemPath(path: string | undefined) {
+        this.plugin.settings[this.settingKey] = path;
+    }
+    private get itemFolders(): string[] {
+        return this.plugin.settings[this.folderSettingKey];
+    }
+
+    constructor(app: App, plugin: RPGLevelsPlugin, itemType: 'Class' | 'Subclass') {
+        super(app);
+        this.plugin = plugin;
+        this.itemType = itemType;
+        this.allItemsFromFoldersCache = [];
+    }
+    
+    async onOpen() {
+        const { contentEl } = this;
+        contentEl.empty();
+        await this.plugin.applyAllPassiveEffects(); // Ensure data is fresh
+        this.allItemsFromFoldersCache = this.getItemsFromFolders();
+
+        contentEl.createEl("h2", { text: `Manage ${this.itemType}` });
+
+        // --- Display Current Selection ---
+        contentEl.createEl("h3", { text: `Current ${this.itemType}` });
+        const currentItemContainer = contentEl.createDiv();
+        const path = this.currentItemPath;
+
+        if (path && path.trim() !== '') {
+            const itemDiv = currentItemContainer.createDiv();
+            // Make the current selection a clickable link
+            await MarkdownRenderer.renderMarkdown(`[[${path}]]`, itemDiv, path, this.plugin);
+            
+            new Setting(currentItemContainer)
+                .addButton(btn => btn
+                    .setButtonText(`Remove ${this.itemType}`)
+                    .setWarning()
+                    .onClick(async () => {
+                        this.currentItemPath = '';
+                        await this.plugin.applyAllPassiveEffects();
+                        await this.plugin.saveSettings();
+                        new Notice(`${this.itemType} removed.`);
+                        this.onOpen(); // Refresh the modal
+                    })
+                );
+        } else {
+            currentItemContainer.createEl("p", { text: `No ${this.itemType.toLowerCase()} selected.` });
+        }
+        contentEl.createEl("hr");
+
+        // --- Display Available Items ---
+        contentEl.createEl("h3", { text: `Available ${this.itemType}s` });
+
+        this.searchInputEl = contentEl.createEl("input", {
+            type: "text",
+            placeholder: `Search available ${this.itemType.toLowerCase()}s...`
+        });
+        this.searchInputEl.style.width = "100%";
+        this.searchInputEl.style.marginBottom = "10px";
+
+        this.searchInputEl.addEventListener("input", (event) => {
+            const searchTerm = (event.target as HTMLInputElement).value;
+            this.renderAvailableItemsList(searchTerm);
+        });
+
+        this.availableItemsContainer = contentEl.createDiv();
+        this.renderAvailableItemsList("");
+    }
+
+    getItemsFromFolders(): TFile[] {
+        const files: TFile[] = [];
+        if(!this.itemFolders) return [];
+
+        for (const folderPath of this.itemFolders) {
+            const folder = this.app.vault.getAbstractFileByPath(folderPath);
+            if (folder instanceof TFolder) {
+                for (const file of folder.children) {
+                    if (file instanceof TFile && file.extension === "md") {
+                        files.push(file);
+                    }
+                }
+            }
+        }
+        return files.sort((a, b) => a.basename.localeCompare(b.basename));
+    }
+
+    renderAvailableItemsList(searchTerm: string) {
+        this.availableItemsContainer.empty();
+        const lowerSearchTerm = searchTerm.toLowerCase();
+        const currentPath = this.currentItemPath;
+
+        const filteredItems = this.allItemsFromFoldersCache.filter(file => {
+            const isNotCurrent = file.path !== currentPath;
+            const matchesSearch = file.basename.toLowerCase().includes(lowerSearchTerm);
+            return isNotCurrent && matchesSearch;
+        });
+
+        if (filteredItems.length === 0) {
+            this.availableItemsContainer.createEl("p", { text: `No other ${this.itemType.toLowerCase()}s available.` });
+        } else {
+            filteredItems.forEach(file => {
+                const row = this.availableItemsContainer.createDiv({ cls: "feat-row" });
+                row.style.display = "flex";
+                row.style.justifyContent = "space-between";
+                row.style.alignItems = "center";
+                row.style.marginBottom = "8px";
+                row.style.padding = "5px";
+                row.style.border = "1px solid var(--background-modifier-border)";
+                row.style.borderRadius = "4px";
+
+                const itemNameDiv = row.createDiv({cls: 'feat-name-link'});
+                itemNameDiv.style.flexGrow = "1";
+                MarkdownRenderer.renderMarkdown(`[[${file.path}]]`, itemNameDiv, file.path, this.plugin);
+                
+                const selectBtn = row.createEl("button", { text: "Select" });
+                selectBtn.onclick = async () => {
+                    this.currentItemPath = file.path;
+                    await this.plugin.applyAllPassiveEffects();
+                    await this.plugin.saveSettings();
+                    new Notice(`${this.itemType} set to: ${file.basename}`);
+                    this.onOpen(); // Refresh the modal
+                };
+            });
+        }
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
 class ImageSuggestModal extends FuzzySuggestModal<TFile> {
 	plugin: RPGLevelsPlugin;
 
@@ -4174,6 +4451,75 @@ new Setting(containerEl)
             this.plugin.settings.visionModalNotePath = value.trim();
             await this.plugin.saveSettings();
         }));
+
+  containerEl.createEl('h3', { text: 'Class & Subclass Settings' });
+
+         // --- Class Folders ---
+        new Setting(containerEl)
+            .setName("Class Folder Paths")
+            .setDesc("Select folders that contain notes for character classes. Feats, classes, and effects in these notes will grant passive bonuses.")
+            .addButton(button => {
+                button.setButtonText("Add Folder");
+                button.onClick(() => {
+                    const folderModal = new FolderSuggestModal(this.app);
+                    folderModal.open();
+                    folderModal.onChooseFolder = (folderPath: string) => {
+                        if (!this.plugin.settings.classFolders.includes(folderPath)) {
+                            this.plugin.settings.classFolders.push(folderPath);
+                            this.plugin.saveSettings();
+                            this.display();
+                        }
+                    };
+                });
+            });
+
+        this.plugin.settings.classFolders.forEach((folderPath, index) => {
+            new Setting(containerEl)
+                .setName(`🎓 ${folderPath}`)
+                .addButton(button =>
+                    button.setButtonText("❌")
+                        .setTooltip("Remove")
+                        .onClick(() => {
+                            this.plugin.settings.classFolders.splice(index, 1);
+                            this.plugin.saveSettings();
+                            this.display();
+                        })
+                );
+        });
+
+
+        // --- Subclass Folders ---
+        new Setting(containerEl)
+            .setName("Subclass Folder Paths")
+            .setDesc("Select folders that contain notes for character subclasses.")
+            .addButton(button => {
+                button.setButtonText("Add Folder");
+                button.onClick(() => {
+                    const folderModal = new FolderSuggestModal(this.app);
+                    folderModal.open();
+                    folderModal.onChooseFolder = (folderPath: string) => {
+                        if (!this.plugin.settings.subclassFolders.includes(folderPath)) {
+                            this.plugin.settings.subclassFolders.push(folderPath);
+                            this.plugin.saveSettings();
+                            this.display();
+                        }
+                    };
+                });
+            });
+
+        this.plugin.settings.subclassFolders.forEach((folderPath, index) => {
+            new Setting(containerEl)
+                .setName(`✨ ${folderPath}`)
+                .addButton(button =>
+                    button.setButtonText("❌")
+                        .setTooltip("Remove")
+                        .onClick(() => {
+                            this.plugin.settings.subclassFolders.splice(index, 1);
+                            this.plugin.saveSettings();
+                            this.display();
+                        })
+                );
+        });
 
 }
 }

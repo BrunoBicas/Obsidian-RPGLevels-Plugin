@@ -87,6 +87,7 @@ interface RPGLevelsSettings {
 	characterStats: CharacterStats;
 	xpToNextLevel: number;
 	obtainedFeats: string[]; // List of note paths or names
+  claimedClassFeats: string[];
     featFolders: string[]; // All possible feats (also note paths or names)
 	featPoints: number;
     extraFeatPointsGranted: number; // contador para bônus a cada 200k XP
@@ -240,6 +241,7 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
 	repeatableEffectFolders: [],
     effects: {},
 	obtainedFeats: [],
+  claimedClassFeats: [], 
     featFolders: [], // You manually populate this in settings
 	featPoints: 0,
 	extraFeatPointsGranted: 0,
@@ -720,6 +722,50 @@ async loadEffectDataWithLevels(path: string, characterLevel: number): Promise<an
     return combinedBonuses;
 }
 
+// Na classe RPGLevelsPlugin
+
+public async loadClassFeatsFromNote(path: string, characterLevel: number): Promise<string[]> {
+    const grantedFeats = new Set<string>();
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) return []; // 
+
+    const metadata = this.app.metadataCache.getFileCache(file)?.frontmatter;
+    if (!metadata) return []; // 
+
+    // Função auxiliar para processar a chave 'grantsClassFeat'
+    const processFeatGrants = (data: any) => {
+        const feats = data?.grantsClassFeat;
+        if (typeof feats === 'string') {
+            grantedFeats.add(feats);
+        } else if (Array.isArray(feats)) {
+            feats.forEach(feat => {
+                if (typeof feat === 'string') {
+                    grantedFeats.add(feat);
+                }
+            });
+        }
+    };
+
+    // Itera por TODAS as chaves no frontmatter para encontrar níveis e bônus base
+    for (const [key, value] of Object.entries(metadata)) {
+        // Verifica se é um bônus de nível (ex: "lvl1", "lvl5") 
+        const levelMatch = key.match(/^lvl(\d+)$/);
+        if (levelMatch) {
+            const featureLevel = parseInt(levelMatch[1], 10);
+            // Se o nível do personagem for suficiente 
+            if (characterLevel >= featureLevel && typeof value === 'object' && value !== null) {
+                processFeatGrants(value);
+            }
+        } 
+        // Processa também talentos na raiz do frontmatter
+        else if (key === 'grantsClassFeat') {
+             processFeatGrants(metadata);
+        }
+    }
+
+    return Array.from(grantedFeats);
+}
+
 async applyAllPassiveEffects() {
     // 1. INICIALIZAÇÃO DE VALORES BASE E ACUMULADORES
     const statsBase: CharacterStats = { Strength: 10, Dexterity: 10, Constitution: 10, Intelligence: 10, Wisdom: 10, Charisma: 10 };
@@ -758,10 +804,12 @@ async applyAllPassiveEffects() {
     // 3. COLETAR TODAS AS FONTES DE BÔNUS
     const allBonusSourcesPaths: string[] = [
         ...this.settings.obtainedFeats,
+        ...(this.settings.claimedClassFeats ?? []), // NOVO
         ...Object.values(this.settings.effects)
             .filter(effect => effect.active && !this.isEffectExpired(effect))
             .map(effect => effect.notePath)
     ];
+    
 
     // NEW: Add selected class and subclass to the sources if they exist
     if (this.settings.class) {
@@ -1405,7 +1453,30 @@ async applyAllPassiveEffects() {
 			this.updateStatusBar();
 			this.saveSettings();
 		}
-	}
+	} 
+
+  public async getAvailableClassFeats(): Promise<string[]> {
+    const allPossibleClassFeats = new Set<string>();
+    const classSources = [this.settings.class, this.settings.subclass].filter(Boolean) as string[];
+    const characterLevel = this.settings.level;
+    const claimedFeats = new Set(this.settings.claimedClassFeats ?? []);
+
+    for (const sourcePath of classSources) {
+        // Usa a nova função loader para obter os talentos de cada nota de classe/subclasse
+        const featsFromFile = await this.loadClassFeatsFromNote(sourcePath, characterLevel);
+        
+        featsFromFile.forEach(feat => {
+            allPossibleClassFeats.add(feat);
+        });
+    }
+
+    // Filtra os talentos que já foram reivindicados
+    const finalFeats = Array.from(allPossibleClassFeats).filter(feat => !claimedFeats.has(feat));
+    
+    return finalFeats;
+}
+
+
 	
 	showStatsModal() {
 		const achievementsEarned = Object.values(this.settings.achievements).filter(Boolean).length;
@@ -1917,6 +1988,7 @@ class StatsModal extends Modal {
     createButton("🎓 Manage Class", () => new SelectionModal(this.app, this.plugin, 'Class').open());
     createButton("✨ Manage Subclass", () => new SelectionModal(this.app, this.plugin, 'Subclass').open());
     createButton("🧠 Manage Feats", () => new FeatsModal(this.app, this.plugin).open());
+    createButton("📜 Manage Class Feats", () => new ClassFeatsModal(this.app, this.plugin).open()); // NOVO
     createButton("🌀 Manage Effects", () => new EffectsModal(this.app, this.plugin).open());
     createButton("❤️ Manage HP", () => new HPManagementModal(this.app, this.plugin).open());
     createButton("🛡️ View Defenses", () => new DefensesModal(this.app, this.plugin).open());
@@ -3783,6 +3855,80 @@ class SelectionModal extends Modal {
                     await this.plugin.saveSettings();
                     new Notice(`${this.itemType} set to: ${file.basename}`);
                     this.onOpen(); // Refresh the modal
+                };
+            });
+        }
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class ClassFeatsModal extends Modal {
+    plugin: RPGLevelsPlugin;
+
+    constructor(app: App, plugin: RPGLevelsPlugin) {
+        super(app);
+        this.plugin = plugin;
+    }
+
+    async onOpen() {
+        const { contentEl } = this;
+        contentEl.empty();
+
+        contentEl.createEl("h2", { text: "Manage Class Feats" });
+
+        // === Talentos de Classe Reivindicados ===
+        contentEl.createEl("h3", { text: "Claimed Class Feats" });
+        const claimedFeats = this.plugin.settings.claimedClassFeats ?? [];
+        const claimedContainer = contentEl.createDiv();
+
+        if (claimedFeats.length === 0) {
+            claimedContainer.createEl("p", { text: "No class feats claimed yet." });
+        } else {
+            claimedFeats.forEach(async (featPath: string) => {
+                const featItemContainer = claimedContainer.createDiv({ cls: 'feat-item-claimed' });
+                // Renderiza como um link clicável para a nota
+                await MarkdownRenderer.renderMarkdown(`[[${featPath}]]`, featItemContainer, featPath, this.plugin);
+            });
+        }
+        contentEl.createEl("hr");
+
+        // === Talentos de Classe Disponíveis ===
+        contentEl.createEl("h3", { text: "Available Class Feats" });
+        const availableContainer = contentEl.createDiv();
+        const availableFeats = await this.plugin.getAvailableClassFeats();
+
+        if (availableFeats.length === 0) {
+            availableContainer.createEl("p", { text: "No new class feats available at your current level." });
+        } else {
+            availableFeats.forEach((featPath: string) => {
+                const row = availableContainer.createDiv({ cls: "feat-row" });
+                row.style.display = "flex";
+                row.style.justifyContent = "space-between";
+                row.style.alignItems = "center";
+                row.style.marginBottom = "8px";
+                row.style.padding = "5px";
+                row.style.border = "1px solid var(--background-modifier-border)";
+                row.style.borderRadius = "4px";
+
+                const featNameDiv = row.createDiv({ cls: 'feat-name-link' });
+                featNameDiv.style.flexGrow = "1";
+                MarkdownRenderer.renderMarkdown(`[[${featPath}]]`, featNameDiv, featPath, this.plugin);
+
+                const claimBtn = row.createEl("button", { text: "Claim Feat" });
+                claimBtn.onclick = async () => {
+                    if (!this.plugin.settings.claimedClassFeats) {
+                        this.plugin.settings.claimedClassFeats = [];
+                    }
+                    this.plugin.settings.claimedClassFeats.push(featPath);
+                    
+                    await this.plugin.applyAllPassiveEffects(); // Aplica os bônus do novo talento
+                    await this.plugin.saveSettings();
+                    
+                    new Notice(`Class feat claimed: ${featPath.split('/').pop()?.replace('.md', '')}`);
+                    this.onOpen(); // Recarrega o modal
                 };
             });
         }

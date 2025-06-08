@@ -87,8 +87,9 @@ interface RPGLevelsSettings {
 	characterStats: CharacterStats;
 	xpToNextLevel: number;
 	obtainedFeats: string[]; // List of note paths or names
-  claimedClassFeats: string[];
     featFolders: string[]; // All possible feats (also note paths or names)
+  obtainedClassFeats: string[]; // NEW
+   classFeatFolders: string[];   // NEW
 	featPoints: number;
     extraFeatPointsGranted: number; // contador para bônus a cada 200k XP
     spentFeatPoints: {
@@ -124,6 +125,7 @@ interface RPGLevelsSettings {
   subclass?: string; // Path to the subclass note
   classFolders: string[];
   subclassFolders: string[];
+  manualFeatPoints: number
   
  
 
@@ -216,6 +218,7 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
 
     skillProficiencies: {}, // Será populado por applyAllPassiveEffects
 	skillFolders: [],
+  manualFeatPoints: 0,
 
 	 speed: {
     baseSpeed: 30, // Default walking speed
@@ -235,13 +238,14 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
     subclass: '',
     classFolders: [],
     subclassFolders: [],
+    obtainedClassFeats: [], // NEW
+	  classFeatFolders: [],   // NEW
 
 
 	effectFolders: [],
 	repeatableEffectFolders: [],
     effects: {},
 	obtainedFeats: [],
-  claimedClassFeats: [], 
     featFolders: [], // You manually populate this in settings
 	featPoints: 0,
 	extraFeatPointsGranted: 0,
@@ -676,6 +680,23 @@ export default class RPGLevelsPlugin extends Plugin {
   return effects;
 }
 
+public getAvailableClassFeatsFromFolders(): string[] {
+    const feats: string[] = [];
+    if (!this.settings.classFeatFolders) return [];
+
+    for (const folderPath of this.settings.classFeatFolders) {
+        const folder = this.app.vault.getAbstractFileByPath(folderPath);
+        if (folder instanceof TFolder) {
+            for (const file of folder.children) {
+                if (file instanceof TFile && file.extension === "md") {
+                    feats.push(file.path);
+                }
+            }
+        }
+    }
+    return feats;
+}
+
 async loadEffectDataWithLevels(path: string, characterLevel: number): Promise<any> {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) return {};
@@ -697,7 +718,7 @@ async loadEffectDataWithLevels(path: string, characterLevel: number): Promise<an
                 // Adiciona os bônus desta característica ao objeto combinado
                 for (const [bonusKey, bonusValue] of Object.entries(value)) {
                     // Ignora chaves que não são bônus diretos
-                    if (bonusKey === 'description' || bonusKey === 'classEffect') continue;
+                    if (bonusKey === 'description' || bonusKey === 'classEffect' || bonusKey === 'grantsClassFeat') continue;
 
                     if (typeof bonusValue === 'number') {
                         combinedBonuses[bonusKey] = (combinedBonuses[bonusKey] || 0) + bonusValue;
@@ -722,55 +743,13 @@ async loadEffectDataWithLevels(path: string, characterLevel: number): Promise<an
     return combinedBonuses;
 }
 
-// Na classe RPGLevelsPlugin
-
-public async loadClassFeatsFromNote(path: string, characterLevel: number): Promise<string[]> {
-    const grantedFeats = new Set<string>();
-    const file = this.app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof TFile)) return []; // 
-
-    const metadata = this.app.metadataCache.getFileCache(file)?.frontmatter;
-    if (!metadata) return []; // 
-
-    // Função auxiliar para processar a chave 'grantsClassFeat'
-    const processFeatGrants = (data: any) => {
-        const feats = data?.grantsClassFeat;
-        if (typeof feats === 'string') {
-            grantedFeats.add(feats);
-        } else if (Array.isArray(feats)) {
-            feats.forEach(feat => {
-                if (typeof feat === 'string') {
-                    grantedFeats.add(feat);
-                }
-            });
-        }
-    };
-
-    // Itera por TODAS as chaves no frontmatter para encontrar níveis e bônus base
-    for (const [key, value] of Object.entries(metadata)) {
-        // Verifica se é um bônus de nível (ex: "lvl1", "lvl5") 
-        const levelMatch = key.match(/^lvl(\d+)$/);
-        if (levelMatch) {
-            const featureLevel = parseInt(levelMatch[1], 10);
-            // Se o nível do personagem for suficiente 
-            if (characterLevel >= featureLevel && typeof value === 'object' && value !== null) {
-                processFeatGrants(value);
-            }
-        } 
-        // Processa também talentos na raiz do frontmatter
-        else if (key === 'grantsClassFeat') {
-             processFeatGrants(metadata);
-        }
-    }
-
-    return Array.from(grantedFeats);
-}
-
 async applyAllPassiveEffects() {
     // 1. INICIALIZAÇÃO DE VALORES BASE E ACUMULADORES
     const statsBase: CharacterStats = { Strength: 10, Dexterity: 10, Constitution: 10, Intelligence: 10, Wisdom: 10, Charisma: 10 };
     const accumulatedStatBonuses: Partial<CharacterStats> = { Strength: 0, Dexterity: 0, Constitution: 0, Intelligence: 0, Wisdom: 0, Charisma: 0 };
     let accumulatedFeatHpBonus = 0;
+    let accumulatedFeatPointBonus = 0;
+    let manualFeatPoints: number;
     let maxFeatTempHP = 0;
 
     // 2. LIMPAR/RESETAR DADOS DERIVADOS ANTES DE RECALCULAR
@@ -784,6 +763,19 @@ async applyAllPassiveEffects() {
     this.settings.speed.baseSpeed = 30; // Reset to default before applying bonuses
     this.settings.speed.additionalSpeeds = {};
     this.settings.vision = { senses: {} }; 
+    this.settings.obtainedClassFeats = []; // IMPORTANT: Reset granted feats before recalculating
+
+    const sourceNotesForBonuses: string[] = [
+    ...this.settings.obtainedFeats,
+    ...this.settings.obtainedClassFeats, // <-- ADICIONE ESTA LINHA
+    ...Object.values(this.settings.effects)
+        .filter(effect => effect.active && !this.isEffectExpired(effect))
+        .map(effect => effect.notePath)
+  ];
+    
+    // Add class and subclass to the list of things to check
+    const classSources = [this.settings.class, this.settings.subclass].filter(Boolean) as string[];
+    
 
 
     const defaultSaveAbilities: (keyof CharacterStats)[] = ["Strength", "Dexterity", "Constitution", "Intelligence", "Wisdom", "Charisma"];
@@ -804,12 +796,35 @@ async applyAllPassiveEffects() {
     // 3. COLETAR TODAS AS FONTES DE BÔNUS
     const allBonusSourcesPaths: string[] = [
         ...this.settings.obtainedFeats,
-        ...(this.settings.claimedClassFeats ?? []), // NOVO
         ...Object.values(this.settings.effects)
             .filter(effect => effect.active && !this.isEffectExpired(effect))
             .map(effect => effect.notePath)
     ];
-    
+
+    // PASSO 4: PROCESSAR OS BÔNUS DE CADA FONTE
+    for (const sourcePath of classSources) {
+        const file = this.app.vault.getAbstractFileByPath(sourcePath);
+        if (file instanceof TFile) {
+            const metadata = this.app.metadataCache.getFileCache(file)?.frontmatter;
+            if (!metadata) continue;
+
+            for (const key in metadata) {
+                const levelMatch = key.match(/^lvl(\d+)$/);
+                if (levelMatch) {
+                    const featureLevel = parseInt(levelMatch[1], 10);
+                    if (this.settings.level >= featureLevel) {
+                        const featureData = metadata[key];
+                        if (featureData && typeof featureData.grantsClassFeat === 'string') {
+                            // Add the granted class feat to our settings
+                            if (!this.settings.obtainedClassFeats.includes(featureData.grantsClassFeat)) {
+                                this.settings.obtainedClassFeats.push(featureData.grantsClassFeat);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // NEW: Add selected class and subclass to the sources if they exist
     if (this.settings.class) {
@@ -819,184 +834,90 @@ async applyAllPassiveEffects() {
         allBonusSourcesPaths.push(this.settings.subclass);
     }
 
-    // 4. ITERAR SOBRE AS FONTES E PROCESSAR SEUS DADOS
-  for (const sourcePath of allBonusSourcesPaths) {
-    const effectData = await this.loadEffectFromNote(sourcePath);
+    // 4. ITERAR SOBRE AS FONTES E PROCESSAR SEUS DADOS   
+  for (const sourcePath of [...new Set(allBonusSourcesPaths)]) { 
+        const effectData = await this.loadEffectDataWithLevels(sourcePath, this.settings.level);
 
-    if (effectData.hpBonus) accumulatedFeatHpBonus += effectData.hpBonus;
-    if (effectData.tempHP) maxFeatTempHP = Math.max(maxFeatTempHP, effectData.tempHP);
-    if (effectData.grantsFeatPoints) accumulatedFeatHpBonus += effectData.grantsFeatPoints;
+        // A partir daqui, a lógica corrigida com os tipos definidos
+        if (effectData.hpBonus) accumulatedFeatHpBonus += effectData.hpBonus;
+        if (effectData.featPointBonus) accumulatedFeatPointBonus += effectData.featPointBonus; // <-- ADICIONE ESTA LINHA
+        if (effectData.tempHP) maxFeatTempHP = Math.max(maxFeatTempHP, effectData.tempHP);
 
-    // Stat bonuses
         for (const statKey in statsBase) {
             if (effectData[statKey] && typeof effectData[statKey] === "number") {
-                accumulatedStatBonuses[statKey as keyof CharacterStats] = (accumulatedStatBonuses[statKey as keyof CharacterStats] || 0) + (effectData[statKey] as number);
+                (accumulatedStatBonuses[statKey as keyof CharacterStats] as number) = (accumulatedStatBonuses[statKey as keyof CharacterStats] || 0) + (effectData[statKey] as number);
             }
         }
 
-
-    // INSERIR O CÓDIGO DE PROCESSAMENTO DE VELOCIDADE AQUI
-    // NEW: Process speed bonus
-    if (typeof effectData.speedBonus === 'number') {
-      this.settings.speed.baseSpeed += effectData.speedBonus;
-      console.log(`Bônus de velocidade base aplicado de ${sourcePath}: +${effectData.speedBonus}`);
-    }
-
-    // NEW: Process additional speeds (e.g., flying, swimming)
-    if (effectData.grantsSpeedType && typeof effectData.grantsSpeedType === 'string' &&
-    typeof effectData.grantsSpeedValue === 'number' && !isNaN(effectData.grantsSpeedValue)) {
-    const type = effectData.grantsSpeedType.toLowerCase().trim();
-    const value = effectData.grantsSpeedValue;
-
-   if (!this.settings.speed.additionalSpeeds[type]) {
-    this.settings.speed.additionalSpeeds[type] = {
-      type: type,
-      value: value,
-      sources: [sourcePath]
-    };
-    console.log(`Nova velocidade adicional concedida de ${sourcePath}: ${type} ${value}`);
-   } else {
-    const existingSpeed = this.settings.speed.additionalSpeeds[type];
-    // SUM the values instead of taking the max if it's a new source or just add to existing
-    existingSpeed.value += value; // MODIFIED: Sum the speed values
-    console.log(`Velocidade adicional ${type} aumentada de <span class="math-inline">\{sourcePath\}\: \+</span>{value} (total agora ${existingSpeed.value})`);
-    
-    if (!existingSpeed.sources.includes(sourcePath)) {
-      existingSpeed.sources.push(sourcePath);
-      console.log(`Fonte adicionada para velocidade adicional ${type}: ${sourcePath}`);
-    }
-   }
-   } else if (effectData.grantsSpeedType || effectData.grantsSpeedValue) {
-    console.warn(`Dados de velocidade adicional incompletos ou inválidos em: ${sourcePath}. Esperava 'grantsSpeedType' (string) e 'grantsSpeedValue' (number).`);
-   }
-
-    for (const [statKey, bonusValue] of Object.entries(effectData)) {
-      if (statKey in accumulatedStatBonuses && typeof bonusValue === "number") {
-        (accumulatedStatBonuses[statKey as keyof CharacterStats]! as number) += bonusValue;
-      }
-    }
-
-    if (effectData.grantsResistances && Array.isArray(effectData.grantsResistances)) {
-      effectData.grantsResistances.forEach(type => {
-        if (typeof type === 'string') {
-          if (!this.settings.defenses.resistances[type]) this.settings.defenses.resistances[type] = [];
-          if (!this.settings.defenses.resistances[type].includes(sourcePath)) this.settings.defenses.resistances[type].push(sourcePath);
-        }
-      });
-    }
-    if (effectData.grantsImmunities && Array.isArray(effectData.grantsImmunities)) {
-      effectData.grantsImmunities.forEach(type => {
-        if (typeof type === 'string') {
-          if (!this.settings.defenses.immunities[type]) this.settings.defenses.immunities[type] = [];
-          if (!this.settings.defenses.immunities[type].includes(sourcePath)) this.settings.defenses.immunities[type].push(sourcePath);
-        }
-      });
-    }
-
-     // === Process Vision/Senses ===
-    // this.settings.vision e this.settings.vision.senses já foram inicializados no começo da função.
-    const processSense = (type: string, rangeKey: string, detailsKey?: string) => { // [cite: 132]
-        const range = effectData[rangeKey] as number | undefined; // [cite: 132]
-        if (typeof range === 'number' && range > 0) { // [cite: 133]
-            const details = detailsKey ? effectData[detailsKey] as string | undefined : undefined; // [cite: 133]
-            const lcType = type.toLowerCase().replace(/\s+/g, '_'); // Normalize type for key [cite: 134]
-
-            if (!this.settings.vision.senses[lcType]) { // [cite: 135]
-                this.settings.vision.senses[lcType] = {
-                    range: range, // [cite: 135]
-                    sources: [sourcePath], // [cite: 135]
-                    details: details // [cite: 135]
-                };
-            } else {
-                const currentSense = this.settings.vision.senses[lcType]; // [cite: 137]
-                currentSense.range += range; // Sum the ranges [cite: 138]
-
-                // Consolidate details: append if new and not already present
-                if (details) { // [cite: 138]
-                    if (!currentSense.details) { // [cite: 138]
-                        currentSense.details = details; // [cite: 139]
-                    } else if (!currentSense.details.toLowerCase().includes(details.toLowerCase())) { // Avoid adding if the same detail (case-insensitive) is already part of the string [cite: 140]
-                        currentSense.details += `; ${details}`; // [cite: 140]
-                    }
+        // Defesas (Resistências e Imunidades)
+        if (effectData.grantsResistances && Array.isArray(effectData.grantsResistances)) {
+            effectData.grantsResistances.forEach((type: string) => { // <<< CORRIGIDO
+                if (typeof type === 'string') {
+                    if (!this.settings.defenses.resistances[type]) this.settings.defenses.resistances[type] = [];
+                    if (!this.settings.defenses.resistances[type].includes(sourcePath)) this.settings.defenses.resistances[type].push(sourcePath);
                 }
-
-                if (!currentSense.sources.includes(sourcePath)) { // [cite: 141]
-                    currentSense.sources.push(sourcePath); // [cite: 141]
+            });
+        }
+        if (effectData.grantsImmunities && Array.isArray(effectData.grantsImmunities)) {
+            effectData.grantsImmunities.forEach((type: string) => { // <<< CORRIGIDO
+                if (typeof type === 'string') {
+                    if (!this.settings.defenses.immunities[type]) this.settings.defenses.immunities[type] = [];
+                    if (!this.settings.defenses.immunities[type].includes(sourcePath)) this.settings.defenses.immunities[type].push(sourcePath);
                 }
+            });
+        }
+        
+        // Perícias (Skills)
+        const processSkillLevel = (skillName: string, level: "proficient" | "expert") => {
+            if (!this.settings.skillProficiencies[skillName]) {
+                this.settings.skillProficiencies[skillName] = { level: "none", sources: [] };
             }
-            // console.log(`Sense granted/updated from ${sourcePath}: ${type} ${range}ft` + (details ? ` (${details})` : '')); // [cite: 142]
+            const current = this.settings.skillProficiencies[skillName];
+            if (level === "expert") current.level = "expert";
+            else if (level === "proficient" && current.level !== "expert") current.level = "proficient";
+            if (!current.sources.includes(sourcePath)) current.sources.push(sourcePath);
+        };
+
+        if (effectData.grantsSkillProficiency && Array.isArray(effectData.grantsSkillProficiency)) {
+            effectData.grantsSkillProficiency.forEach((skillName: string) => { // <<< CORRIGIDO
+                if (typeof skillName === 'string') processSkillLevel(skillName, "proficient");
+            });
         }
-    };
+        if (effectData.grantsSkillExpertise && Array.isArray(effectData.grantsSkillExpertise)) {
+            effectData.grantsSkillExpertise.forEach((skillName: string) => { // <<< CORRIGIDO
+                if (typeof skillName === 'string') processSkillLevel(skillName, "expert");
+            });
+        }
+        
+        // Salvamentos (Saving Throws)
+        const processSaveLevel = (abilityName: string, level: "proficient" | "expert") => {
+            const saveKey = `${abilityName.toLowerCase()}Save` as keyof typeof this.settings.proficiencies;
+            const current = this.settings.proficiencies[saveKey];
+            if (level === "expert") {
+                current.level = "expert";
+            } else if (level === "proficient" && current.level !== "expert") {
+                current.level = "proficient";
+            }
+            if (!current.sources.includes(sourcePath)) {
+                current.sources.push(sourcePath);
+            }
+        };
 
-    // Call processSense for different vision types
-    if (effectData.grantsDarkvision) processSense("Darkvision", "grantsDarkvision"); // [cite: 143]
-    if (effectData.grantsBlindsightRange) processSense("Blindsight", "grantsBlindsightRange", "grantsBlindsightDetails"); // [cite: 144]
-    if (effectData.grantsTruesight) processSense("Truesight", "grantsTruesight"); // [cite: 144]
-    if (effectData.grantsTremorsense) processSense("Tremorsense", "grantsTremorsense"); // [cite: 144]
-
-    // Process generic senses (e.g., grantsSense_KeenSmell_Range, grantsSense_KeenSmell_Details)
-    for (const key in effectData) { // [cite: 145]
-        if (key.startsWith("grantsSense_") && key.endsWith("_Range")) { // [cite: 145]
-            const typeNameSubstring = key.substring("grantsSense_".length, key.length - "_Range".length); // [cite: 145]
-            const typeName = typeNameSubstring.replace(/_/g, ' '); // e.g., "Keen Smell" [cite: 146]
-            const detailsKeyGeneric = `grantsSense_${typeNameSubstring}_Details`; // Reconstruct the original key format for details [cite: 146]
-            processSense(typeName, key, detailsKeyGeneric); // [cite: 147]
+        if (effectData.grantsSaveProficiency && Array.isArray(effectData.grantsSaveProficiency)) {
+            effectData.grantsSaveProficiency.forEach((abilityName: string) => { // <<< CORRIGIDO
+                if (typeof abilityName === 'string' && defaultSaveAbilities.includes(abilityName as keyof CharacterStats)) {
+                    processSaveLevel(abilityName, "proficient");
+                }
+            });
+        }
+        if (effectData.grantsSaveExpertise && Array.isArray(effectData.grantsSaveExpertise)) {
+            effectData.grantsSaveExpertise.forEach((abilityName: string) => { // <<< CORRIGIDO
+                if (typeof abilityName === 'string' && defaultSaveAbilities.includes(abilityName as keyof CharacterStats)) {
+                    processSaveLevel(abilityName, "expert");
+                }
+            });
         }
     }
-    // === FIM Process Vision/Senses ===
-
-    
-
-    
-
-
-    const processSkillLevel = (skillName: string, level: "proficient" | "expert") => {
-      if (!this.settings.skillProficiencies[skillName]) {
-        this.settings.skillProficiencies[skillName] = { level: "none", sources: [] };
-      }
-      const current = this.settings.skillProficiencies[skillName];
-      if (level === "expert") current.level = "expert";
-      else if (level === "proficient" && current.level !== "expert") current.level = "proficient";
-      if (!current.sources.includes(sourcePath)) current.sources.push(sourcePath);
-    };
-    if (effectData.grantsSkillProficiency && Array.isArray(effectData.grantsSkillProficiency)) {
-      effectData.grantsSkillProficiency.forEach(skillName => {
-        if (typeof skillName === 'string') processSkillLevel(skillName, "proficient");
-      });
-    }
-    if (effectData.grantsSkillExpertise && Array.isArray(effectData.grantsSkillExpertise)) {
-      effectData.grantsSkillExpertise.forEach(skillName => {
-        if (typeof skillName === 'string') processSkillLevel(skillName, "expert");
-      });
-    }
-
-    const processSaveLevel = (abilityName: string, level: "proficient" | "expert") => {
-      const saveKey = `${abilityName.toLowerCase()}Save` as keyof typeof this.settings.proficiencies;
-      const current = this.settings.proficiencies[saveKey]; // Já foi inicializado no começo da função
-      if (level === "expert") {
-        current.level = "expert";
-      } else if (level === "proficient" && current.level !== "expert") {
-        current.level = "proficient";
-      }
-      if (!current.sources.includes(sourcePath)) {
-        current.sources.push(sourcePath);
-      }
-    };
-    if (effectData.grantsSaveProficiency && Array.isArray(effectData.grantsSaveProficiency)) {
-      effectData.grantsSaveProficiency.forEach(abilityName => {
-        if (typeof abilityName === 'string' && defaultSaveAbilities.includes(abilityName as keyof CharacterStats)) {
-          processSaveLevel(abilityName, "proficient");
-        }
-      });
-    }
-    if (effectData.grantsSaveExpertise && Array.isArray(effectData.grantsSaveExpertise)) {
-      effectData.grantsSaveExpertise.forEach(abilityName => {
-        if (typeof abilityName === 'string' && defaultSaveAbilities.includes(abilityName as keyof CharacterStats)) {
-          processSaveLevel(abilityName, "expert");
-        }
-      });
-    }
-  }
 
     // 5. CALCULAR ATRIBUTOS FINAIS
     const statIncreaseFromLevel = Math.floor(this.settings.level / 4);
@@ -1011,9 +932,13 @@ async applyAllPassiveEffects() {
     this.settings.characterStats = finalCharacterStats;
     const featLevels = [4, 8, 12, 16, 19]; // Example D&D ASI levels
     let pointsFromLevels = featLevels.filter(l => l <= this.settings.level).length;
-    this.settings.featPoints = pointsFromLevels + accumulatedFeatHpBonus - (this.settings.spentFeatPoints?.feats?.length || 0) - Object.values(this.settings.spentFeatPoints?.statIncreases || {}).reduce((a, b) => a + b, 0);
+    const totalSpentPoints = (this.settings.spentFeatPoints?.feats?.length || 0) + Object.values(this.settings.spentFeatPoints?.statIncreases || {}).reduce((a, b) => a + b, 0);
 
-
+   this.settings.featPoints = 
+    (this.settings.manualFeatPoints || 0) +  // <-- PONTOS MANUAIS
+    pointsFromLevels +                        // Pontos ganhos por nível
+    accumulatedFeatPointBonus -               // Pontos ganhos por bônus de feats/efeitos
+    totalSpentPoints;                         // Pontos gastos
 
     // 6. CALCULAR HP E TEMP HP FINAL
     // Garante que hpPerLevel tenha entradas suficientes
@@ -1453,30 +1378,7 @@ async applyAllPassiveEffects() {
 			this.updateStatusBar();
 			this.saveSettings();
 		}
-	} 
-
-  public async getAvailableClassFeats(): Promise<string[]> {
-    const allPossibleClassFeats = new Set<string>();
-    const classSources = [this.settings.class, this.settings.subclass].filter(Boolean) as string[];
-    const characterLevel = this.settings.level;
-    const claimedFeats = new Set(this.settings.claimedClassFeats ?? []);
-
-    for (const sourcePath of classSources) {
-        // Usa a nova função loader para obter os talentos de cada nota de classe/subclasse
-        const featsFromFile = await this.loadClassFeatsFromNote(sourcePath, characterLevel);
-        
-        featsFromFile.forEach(feat => {
-            allPossibleClassFeats.add(feat);
-        });
-    }
-
-    // Filtra os talentos que já foram reivindicados
-    const finalFeats = Array.from(allPossibleClassFeats).filter(feat => !claimedFeats.has(feat));
-    
-    return finalFeats;
-}
-
-
+	}
 	
 	showStatsModal() {
 		const achievementsEarned = Object.values(this.settings.achievements).filter(Boolean).length;
@@ -1988,7 +1890,7 @@ class StatsModal extends Modal {
     createButton("🎓 Manage Class", () => new SelectionModal(this.app, this.plugin, 'Class').open());
     createButton("✨ Manage Subclass", () => new SelectionModal(this.app, this.plugin, 'Subclass').open());
     createButton("🧠 Manage Feats", () => new FeatsModal(this.app, this.plugin).open());
-    createButton("📜 Manage Class Feats", () => new ClassFeatsModal(this.app, this.plugin).open()); // NOVO
+    createButton("⚜️ Manage Class Feats", () => new ClassFeatsModal(this.app, this.plugin).open());
     createButton("🌀 Manage Effects", () => new EffectsModal(this.app, this.plugin).open());
     createButton("❤️ Manage HP", () => new HPManagementModal(this.app, this.plugin).open());
     createButton("🛡️ View Defenses", () => new DefensesModal(this.app, this.plugin).open());
@@ -3876,62 +3778,46 @@ class ClassFeatsModal extends Modal {
     async onOpen() {
         const { contentEl } = this;
         contentEl.empty();
+        await this.plugin.applyAllPassiveEffects(); // Ensure data is up to date
 
         contentEl.createEl("h2", { text: "Manage Class Feats" });
 
-        // === Talentos de Classe Reivindicados ===
-        contentEl.createEl("h3", { text: "Claimed Class Feats" });
-        const claimedFeats = this.plugin.settings.claimedClassFeats ?? [];
-        const claimedContainer = contentEl.createDiv();
+        // --- Display Obtained Class Feats ---
+        contentEl.createEl("h3", { text: "Obtained Class Feats" });
+        const obtainedFeatsContainer = contentEl.createDiv();
+        const obtainedFeats = this.plugin.settings.obtainedClassFeats ?? [];
 
-        if (claimedFeats.length === 0) {
-            claimedContainer.createEl("p", { text: "No class feats claimed yet." });
+        if (obtainedFeats.length === 0) {
+            obtainedFeatsContainer.createEl("p", { text: "No class feats obtained yet." });
         } else {
-            claimedFeats.forEach(async (featPath: string) => {
-                const featItemContainer = claimedContainer.createDiv({ cls: 'feat-item-claimed' });
-                // Renderiza como um link clicável para a nota
-                await MarkdownRenderer.renderMarkdown(`[[${featPath}]]`, featItemContainer, featPath, this.plugin);
+            obtainedFeats.forEach(featPath => {
+                const featItem = obtainedFeatsContainer.createDiv({ cls: 'feat-item-obtained' });
+                // Make the feat a clickable link
+                MarkdownRenderer.renderMarkdown(`- [[${featPath}]]`, featItem, featPath, this.plugin);
             });
         }
         contentEl.createEl("hr");
 
-        // === Talentos de Classe Disponíveis ===
-        contentEl.createEl("h3", { text: "Available Class Feats" });
-        const availableContainer = contentEl.createDiv();
-        const availableFeats = await this.plugin.getAvailableClassFeats();
+        // --- Display ALL Available Class Feats from folders for reference ---
+        contentEl.createEl("h3", { text: "All Available Class Feats (Reference)" });
+        const availableFeatsContainer = contentEl.createDiv();
+        const allFeatsFromFolders = this.plugin.getAvailableClassFeatsFromFolders();
 
-        if (availableFeats.length === 0) {
-            availableContainer.createEl("p", { text: "No new class feats available at your current level." });
+        if (allFeatsFromFolders.length === 0) {
+            availableFeatsContainer.createEl("p", { text: "No class feat folders configured in settings." });
         } else {
-            availableFeats.forEach((featPath: string) => {
-                const row = availableContainer.createDiv({ cls: "feat-row" });
-                row.style.display = "flex";
-                row.style.justifyContent = "space-between";
-                row.style.alignItems = "center";
-                row.style.marginBottom = "8px";
-                row.style.padding = "5px";
-                row.style.border = "1px solid var(--background-modifier-border)";
-                row.style.borderRadius = "4px";
-
-                const featNameDiv = row.createDiv({ cls: 'feat-name-link' });
-                featNameDiv.style.flexGrow = "1";
-                MarkdownRenderer.renderMarkdown(`[[${featPath}]]`, featNameDiv, featPath, this.plugin);
-
-                const claimBtn = row.createEl("button", { text: "Claim Feat" });
-                claimBtn.onclick = async () => {
-                    if (!this.plugin.settings.claimedClassFeats) {
-                        this.plugin.settings.claimedClassFeats = [];
-                    }
-                    this.plugin.settings.claimedClassFeats.push(featPath);
-                    
-                    await this.plugin.applyAllPassiveEffects(); // Aplica os bônus do novo talento
-                    await this.plugin.saveSettings();
-                    
-                    new Notice(`Class feat claimed: ${featPath.split('/').pop()?.replace('.md', '')}`);
-                    this.onOpen(); // Recarrega o modal
-                };
+            allFeatsFromFolders.forEach(featPath => {
+                const featItem = availableFeatsContainer.createDiv({ cls: 'feat-item-available' });
+                MarkdownRenderer.renderMarkdown(`- [[${featPath}]]`, featItem, featPath, this.plugin);
             });
         }
+
+        new Setting(contentEl)
+            .addButton(btn => btn
+                .setButtonText("Close")
+                .setCta()
+                .onClick(() => this.close())
+            );
     }
 
     onClose() {
@@ -4500,16 +4386,18 @@ this.plugin.settings.featFolders.forEach((folderPath, index) => {
 });
 
 new Setting(containerEl)
-  .setName("Feat Points")
+  .setName("Manual Feat Points")
   .setDesc("Número atual de Feat Points do personagem.")
   .addText(text => text
     .setPlaceholder("0")
-    .setValue(String(this.plugin.settings.featPoints ?? 0))
+    .setValue(String(this.plugin.settings.manualFeatPoints ?? 0)) // <-- Use a nova propriedade
     .onChange(async (value) => {
       const parsed = parseInt(value);
-      if (!isNaN(parsed) && parsed >= 0) {
-        this.plugin.settings.featPoints = parsed;
+      if (!isNaN(parsed)) { // Permite valores negativos se precisar remover pontos
+        this.plugin.settings.manualFeatPoints = parsed; // <-- Salve na nova propriedade
         await this.plugin.saveSettings();
+        // Dispare um recálculo para atualizar o total imediatamente
+        await this.plugin.applyAllPassiveEffects(); 
       }
     }));
 
@@ -4666,6 +4554,38 @@ new Setting(containerEl)
                         })
                 );
         });
+
+        // --- Class Feat Folders ---
+new Setting(containerEl)
+    .setName("Class Feats Folder Paths")
+    .setDesc("Select folders that contain notes for your special Class Feats.")
+    .addButton(button => {
+        button.setButtonText("Add Folder");
+        button.onClick(() => {
+            const folderModal = new FolderSuggestModal(this.app);
+            folderModal.open();
+            folderModal.onChooseFolder = (folderPath: string) => {
+                if (!this.plugin.settings.classFeatFolders.includes(folderPath)) {
+                    this.plugin.settings.classFeatFolders.push(folderPath);
+                    this.plugin.saveSettings();
+                    this.display();
+                }
+            };
+        });
+    });
+
+this.plugin.settings.classFeatFolders.forEach((folderPath, index) => {
+    new Setting(containerEl)
+        .setName(`⚜️ ${folderPath}`)
+        .addButton(button =>
+            button.setButtonText("❌").setTooltip("Remove")
+                .onClick(() => {
+                    this.plugin.settings.classFeatFolders.splice(index, 1);
+                    this.plugin.saveSettings();
+                    this.display();
+                })
+        );
+});
 
 }
 }

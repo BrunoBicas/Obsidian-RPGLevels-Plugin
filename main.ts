@@ -337,6 +337,26 @@ export default class RPGLevelsPlugin extends Plugin {
     return 2; // Levels 1-4
   }
 
+  // Na classe RPGLevelsPlugin
+  public async performLongRest() {
+    const health = this.settings.health;
+
+    // 1. Recupera todo o HP
+    health.currentHP = health.maxHP;
+
+    // 2. Remove todo o HP temporário (manual e de efeitos)
+    health.tempHP = 0;
+    health.manualTempHP = 0;
+    
+    new Notice("Long rest complete. HP is fully restored and temporary HP is removed.");
+
+    // 3. Dispara um evento para que outros plugins possam reagir
+    this.app.workspace.trigger('rpg-levels:long-rest-completed');
+
+    // 4. Salva as alterações
+    await this.saveSettings();
+  }
+
   public async loadSkillDefinitions(): Promise<LoadedSkillDefinition[]> {
     const loadedSkills: LoadedSkillDefinition[] = [];
     if (!this.settings.skillFolders || this.settings.skillFolders.length === 0) {
@@ -1915,6 +1935,16 @@ class StatsModal extends Modal {
 
 	  contentEl.createEl("hr"); // Separator
 
+     buttonContainer.createEl("button", { text: "🌙 Long Rest", cls: "mod-cta" }).onclick = async () => {
+        if (confirm("Are you sure you want to take a long rest? This will fully heal you and remove all temporary HP.")) {
+            this.close();
+            await this.plugin.performLongRest();
+            // Reabre o modal para mostrar o HP atualizado
+            new StatsModal(this.app, this.plugin).open();
+        }
+    };
+
+
     if (this.plugin.settings.characterNotePath) {
       contentEl.createEl("button", { text: "📘 Abrir Página do Personagem", cls: "mod-cta" })
         .onclick = () => {
@@ -2447,7 +2477,7 @@ class DamageModal extends Modal {
     });
   }
   
-  // Modificado para aceitar damageType
+// Na classe DamageModal
   async applyDamage(damageAmount: number, damageType: string, sourceDescription: string) {
     if (damageAmount < 0) {
         new Notice("Damage cannot be negative.");
@@ -2457,10 +2487,9 @@ class DamageModal extends Modal {
     const initialDamage = damageAmount;
     let finalDamage = damageAmount;
     const defenses = this.plugin.settings.defenses;
-
     let defenseMessage = "";
 
-    // Aplicar imunidades e resistências apenas se não for 'Typeless'
+    // Aplica imunidades e resistências
     if (damageType !== 'Typeless') {
         if (defenses.immunities && defenses.immunities[damageType] && defenses.immunities[damageType].length > 0) {
             finalDamage = 0;
@@ -2472,22 +2501,23 @@ class DamageModal extends Modal {
     }
     
     new Notice(`${sourceDescription} for ${initialDamage} ${damageType} damage. ${defenseMessage || `Effective: ${finalDamage}`}`);
-    if (finalDamage === 0 && initialDamage > 0 && defenseMessage.includes("Immune")) { // Se imune, não aplica dano
-        this.onOpen(); // Apenas atualiza o modal
+    if (finalDamage === 0) {
+        this.onOpen();
         return;
     }
 
-
     const health = this.plugin.settings.health;
-    let remainingDamage = finalDamage; // Usa o dano após resistências/imunidades
+    let remainingDamage = finalDamage;
     let effectiveTempHP = this.getEffectiveTempHP();
 
+    // **LÓGICA CORRIGIDA PARA REDUZIR HP TEMPORÁRIO**
     if (effectiveTempHP > 0 && remainingDamage > 0) {
         const damageToTemp = Math.min(remainingDamage, effectiveTempHP);
-        if (health.manualTempHP && health.manualTempHP > 0) {
-            const reduceManualBy = Math.min(damageToTemp, health.manualTempHP);
-            health.manualTempHP -= reduceManualBy;
-        }
+        
+        // Reduz de ambas as fontes de Temp HP, pois elas representam o mesmo pool
+        health.tempHP = Math.max(0, (health.tempHP || 0) - damageToTemp);
+        health.manualTempHP = Math.max(0, (health.manualTempHP || 0) - damageToTemp);
+        
         remainingDamage -= damageToTemp;
         new Notice(`Dealt ${damageToTemp} to Temporary HP.`);
     }
@@ -2500,7 +2530,7 @@ class DamageModal extends Modal {
     await this.plugin.saveSettings();
     this.onOpen();
   }
-
+  
   parseAndRollDice(diceString: string): number | null { /* ... (como na resposta anterior) ... */
     diceString = diceString.replace(/\s/g, ''); 
     const dicePattern = /^(\d*)d(\d+)(?:([+-])(\d+))?$/i; 
@@ -2634,6 +2664,19 @@ class DamageModal extends Modal {
             this.onOpen(); 
           })
       );
+       // NOVO BOTÃO PARA CURAR TOTALMENTE
+    new Setting(section)
+        .addButton((button) => 
+            button
+                .setButtonText("Heal to Full")
+                .onClick(async () => {
+                    const health = this.plugin.settings.health;
+                    health.currentHP = health.maxHP;
+                    new Notice("HP has been fully restored.");
+                    await this.plugin.saveSettings();
+                    this.onOpen(); // Atualiza a exibição no modal
+                })
+        );
   }
 
   createTempHPSection(container: HTMLElement) { /* ... (como na resposta anterior) ... */
@@ -3673,6 +3716,15 @@ class SelectionModal extends Modal {
             const itemDiv = currentItemContainer.createDiv();
             // Make the current selection a clickable link
             await MarkdownRenderer.renderMarkdown(`[[${path}]]`, itemDiv, path, this.plugin);
+
+            const linkEl = itemDiv.querySelector("a.internal-link");
+            if (linkEl) {
+            linkEl.addEventListener("click", (e) => {
+                e.preventDefault();
+                this.app.workspace.openLinkText(path, '', false);
+            });
+            }
+
             
             new Setting(currentItemContainer)
                 .addButton(btn => btn
@@ -3754,6 +3806,14 @@ class SelectionModal extends Modal {
                 const itemNameDiv = row.createDiv({cls: 'feat-name-link'});
                 itemNameDiv.style.flexGrow = "1";
                 MarkdownRenderer.renderMarkdown(`[[${file.path}]]`, itemNameDiv, file.path, this.plugin);
+
+                const linkEl = itemNameDiv.querySelector("a.internal-link");
+               if (linkEl) {
+                linkEl.addEventListener("click", (e) => {
+                    e.preventDefault();
+                    this.app.workspace.openLinkText(file.path, '', false);
+                });
+                }
                 
                 const selectBtn = row.createEl("button", { text: "Select" });
                 selectBtn.onclick = async () => {
@@ -3799,6 +3859,13 @@ class ClassFeatsModal extends Modal {
                 const featItem = obtainedFeatsContainer.createDiv({ cls: 'feat-item-obtained' });
                 // Make the feat a clickable link
                 MarkdownRenderer.renderMarkdown(`- [[${featPath}]]`, featItem, featPath, this.plugin);
+                const linkEl = featItem.querySelector("a.internal-link");
+                 if (linkEl) {
+                linkEl.addEventListener("click", (e) => {
+                    e.preventDefault();
+                    this.app.workspace.openLinkText(featPath, '', false);
+                });
+            }
             });
         }
         contentEl.createEl("hr");
@@ -3814,6 +3881,13 @@ class ClassFeatsModal extends Modal {
             allFeatsFromFolders.forEach(featPath => {
                 const featItem = availableFeatsContainer.createDiv({ cls: 'feat-item-available' });
                 MarkdownRenderer.renderMarkdown(`- [[${featPath}]]`, featItem, featPath, this.plugin);
+                const linkEl = featItem.querySelector("a.internal-link");
+            if (linkEl) {
+                linkEl.addEventListener("click", (e) => {
+                    e.preventDefault();
+                    this.app.workspace.openLinkText(featPath, '', false);
+                });
+            }
             });
         }
 

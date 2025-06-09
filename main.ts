@@ -833,6 +833,10 @@ async applyAllPassiveEffects() {
     if (this.settings.subclass) {
         allBonusSourcesPaths.push(this.settings.subclass);
     }
+    // FIX: Add the newly granted class feats to the list of sources to process
+    if (this.settings.obtainedClassFeats && this.settings.obtainedClassFeats.length > 0) {
+        allBonusSourcesPaths.push(...this.settings.obtainedClassFeats);
+    }
 
     // 4. ITERAR SOBRE AS FONTES E PROCESSAR SEUS DADOS   
   for (const sourcePath of [...new Set(allBonusSourcesPaths)]) { 
@@ -936,6 +940,7 @@ async applyAllPassiveEffects() {
 
    this.settings.featPoints = 
     (this.settings.manualFeatPoints || 0) +  // <-- PONTOS MANUAIS
+    (this.settings.extraFeatPointsGranted || 0) + // Pontos por XP pós-nível 20
     pointsFromLevels +                        // Pontos ganhos por nível
     accumulatedFeatPointBonus -               // Pontos ganhos por bônus de feats/efeitos
     totalSpentPoints;                         // Pontos gastos

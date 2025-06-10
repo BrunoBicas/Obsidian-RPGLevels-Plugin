@@ -337,6 +337,42 @@ export default class RPGLevelsPlugin extends Plugin {
     return 2; // Levels 1-4
   }
 
+  public async updateTempHP() {
+    let maxPotentialTempHP = 0;
+    
+    const allBonusSourcesPaths = [
+        ...this.settings.obtainedFeats,
+        ...this.settings.obtainedClassFeats,
+        ...Object.values(this.settings.effects)
+            .filter(effect => effect.active && !this.isEffectExpired(effect))
+            .map(effect => effect.notePath)
+    ];
+    
+    // Inclui a classe e subclasse como possíveis fontes de HP temporário
+    if (this.settings.class) allBonusSourcesPaths.push(this.settings.class);
+    if (this.settings.subclass) allBonusSourcesPaths.push(this.settings.subclass);
+
+    // Encontra o maior valor de HP temporário de todas as fontes ativas
+    for (const sourcePath of [...new Set(allBonusSourcesPaths)]) {
+        const effectData = await this.loadEffectDataWithLevels(sourcePath, this.settings.level);
+        if (effectData.tempHP && typeof effectData.tempHP === "number") {
+            maxPotentialTempHP = Math.max(maxPotentialTempHP, effectData.tempHP);
+        }
+    }
+
+    // Lógica crucial:
+    // Se a fonte de temp HP foi removida, o HP temporário atual não pode ser maior que o novo máximo.
+    if ((this.settings.health.tempHP || 0) > maxPotentialTempHP) {
+        this.settings.health.tempHP = maxPotentialTempHP;
+    }
+
+    // Se uma nova fonte de temp HP for maior que a atual, ela a substitui.
+    // Isso permite ganhar um bônus de temp HP maior de um novo efeito.
+    if (maxPotentialTempHP > (this.settings.health.tempHP || 0)) {
+        this.settings.health.tempHP = maxPotentialTempHP;
+    }
+ }
+
   // Na classe RPGLevelsPlugin
   public async performLongRest() {
     const health = this.settings.health;
@@ -770,7 +806,7 @@ async applyAllPassiveEffects() {
     let accumulatedFeatHpBonus = 0;
     let accumulatedFeatPointBonus = 0;
     let manualFeatPoints: number;
-    let maxFeatTempHP = 0;
+    
 
     // 2. LIMPAR/RESETAR DADOS DERIVADOS ANTES DE RECALCULAR
     if (!this.settings.defenses) {
@@ -865,7 +901,7 @@ async applyAllPassiveEffects() {
         // A partir daqui, a lógica corrigida com os tipos definidos
         if (effectData.hpBonus) accumulatedFeatHpBonus += effectData.hpBonus;
         if (effectData.featPointBonus) accumulatedFeatPointBonus += effectData.featPointBonus; // <-- ADICIONE ESTA LINHA
-        if (effectData.tempHP) maxFeatTempHP = Math.max(maxFeatTempHP, effectData.tempHP);
+        
 
         for (const statKey in statsBase) {
             if (effectData[statKey] && typeof effectData[statKey] === "number") {
@@ -941,6 +977,61 @@ async applyAllPassiveEffects() {
                 }
             });
         }
+
+       if (effectData.speedBonus && typeof effectData.speedBonus === 'number') {
+    this.settings.speed.baseSpeed += effectData.speedBonus;
+  }
+
+  if (effectData.grantsSpeedType && typeof effectData.grantsSpeedType === 'string' && effectData.grantsSpeedValue && typeof effectData.grantsSpeedValue === 'number') {
+    const type = effectData.grantsSpeedType.toLowerCase();
+    if (!this.settings.speed.additionalSpeeds[type]) {
+        this.settings.speed.additionalSpeeds[type] = { type: type, value: 0, sources: [] };
+    }
+    // ALTERAÇÃO AQUI: Trocado Math.max por += para somar as velocidades
+    this.settings.speed.additionalSpeeds[type].value += effectData.grantsSpeedValue; 
+    
+    if (!this.settings.speed.additionalSpeeds[type].sources.includes(sourcePath)) {
+        this.settings.speed.additionalSpeeds[type].sources.push(sourcePath);
+    }
+   }
+      // NOVO BLOCO: Processar bônus de Visão e Sentidos (Vision)
+  const processSense = (senseType: string, range: number, details?: string) => {
+    const type = senseType.toLowerCase();
+    if (!this.settings.vision.senses[type]) {
+        this.settings.vision.senses[type] = { range: 0, sources: [], details: '' };
+    }
+    // Soma os alcances de diferentes fontes
+    this.settings.vision.senses[type].range += range;
+    if (!this.settings.vision.senses[type].sources.includes(sourcePath)) {
+        this.settings.vision.senses[type].sources.push(sourcePath);
+    }
+    // Concatena detalhes de diferentes fontes
+    if (details) {
+        this.settings.vision.senses[type].details = (this.settings.vision.senses[type].details ? this.settings.vision.senses[type].details + '; ' : '') + details;
+    }
+  };
+
+  if (effectData.grantsDarkvision && typeof effectData.grantsDarkvision === 'number') {
+    processSense('darkvision', effectData.grantsDarkvision);
+  }
+  if (effectData.grantsBlindsightRange && typeof effectData.grantsBlindsightRange === 'number') {
+    processSense('blindsight', effectData.grantsBlindsightRange, effectData.grantsBlindsightDetails);
+  }
+  if (effectData.grantsTruesight && typeof effectData.grantsTruesight === 'number') {
+    processSense('truesight', effectData.grantsTruesight);
+  }
+  if (effectData.grantsTremorsense && typeof effectData.grantsTremorsense === 'number') {
+    processSense('tremorsense', effectData.grantsTremorsense);
+  }
+
+  // Lógica genérica para sentidos customizados (ex: grantsSense_Keen_Smell_Range)
+  for (const key in effectData) {
+    if (key.startsWith("grantsSense_") && key.endsWith("_Range") && typeof effectData[key] === 'number') {
+        const senseName = key.replace("grantsSense_", "").replace("_Range", "").replace(/_/g, ' ');
+        const detailsKey = `grantsSense_${senseName.replace(/ /g, '_')}_Details`;
+        processSense(senseName, effectData[key], effectData[detailsKey]);
+       }
+      }
     }
 
     // 5. CALCULAR ATRIBUTOS FINAIS
@@ -982,7 +1073,7 @@ async applyAllPassiveEffects() {
     const newMaxHP = baseHpFromLevels + accumulatedFeatHpBonus + totalConBonusToHp;
 
     this.settings.health.maxHP = newMaxHP;
-    this.settings.health.tempHP = maxFeatTempHP;
+    
 
     const currentHP = this.settings.health.currentHP;
     const lastMaxHP = this.settings.health.lastMaxHP ?? 0;
@@ -997,6 +1088,7 @@ async applyAllPassiveEffects() {
     this.settings.proficiencyBonus = this.calculateProficiencyBonus();
 
     // 8. SALVAR AS CONFIGURAÇÕES
+    
     await this.saveSettings();
 }
 
@@ -2477,7 +2569,7 @@ class DamageModal extends Modal {
     });
   }
   
-// Na classe DamageModal
+  // Na classe DamageModal
   async applyDamage(damageAmount: number, damageType: string, sourceDescription: string) {
     if (damageAmount < 0) {
         new Notice("Damage cannot be negative.");
@@ -2489,7 +2581,7 @@ class DamageModal extends Modal {
     const defenses = this.plugin.settings.defenses;
     let defenseMessage = "";
 
-    // Aplica imunidades e resistências
+    // Apply immunities and resistances 
     if (damageType !== 'Typeless') {
         if (defenses.immunities && defenses.immunities[damageType] && defenses.immunities[damageType].length > 0) {
             finalDamage = 0;
@@ -2510,16 +2602,19 @@ class DamageModal extends Modal {
     let remainingDamage = finalDamage;
     let effectiveTempHP = this.getEffectiveTempHP();
 
-    // **LÓGICA CORRIGIDA PARA REDUZIR HP TEMPORÁRIO**
+    // Corrected logic for reducing temporary HP
     if (effectiveTempHP > 0 && remainingDamage > 0) {
-        const damageToTemp = Math.min(remainingDamage, effectiveTempHP);
-        
-        // Reduz de ambas as fontes de Temp HP, pois elas representam o mesmo pool
-        health.tempHP = Math.max(0, (health.tempHP || 0) - damageToTemp);
-        health.manualTempHP = Math.max(0, (health.manualTempHP || 0) - damageToTemp);
-        
-        remainingDamage -= damageToTemp;
-        new Notice(`Dealt ${damageToTemp} to Temporary HP.`);
+        const damageAbsorbedByTempHP = Math.min(remainingDamage, effectiveTempHP);
+        const newTempHPValue = effectiveTempHP - damageAbsorbedByTempHP;
+
+        // The problem is that health.tempHP is reset by other functions.
+        // The workaround is to store the new, depleted state of the entire pool
+        // in the persistent health.manualTempHP and clear the volatile health.tempHP.
+        health.manualTempHP = newTempHPValue;
+        health.tempHP = newTempHPValue; // Also set this for immediate display consistency.
+
+        remainingDamage -= damageAbsorbedByTempHP;
+        new Notice(`Absorbed ${damageAbsorbedByTempHP} damage with Temporary HP.`);
     }
 
     if (remainingDamage > 0) {

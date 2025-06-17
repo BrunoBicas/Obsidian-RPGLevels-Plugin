@@ -59,6 +59,7 @@ interface HealthData {
   tempHP: number; // This will store temp HP from items/effects
   manualTempHP?: number; // Temp HP from manual grants
   lastMaxHP: number;
+  lastMaxPotentialTempHP?: number;
 }
 
 interface SkillDefinition {
@@ -337,22 +338,21 @@ export default class RPGLevelsPlugin extends Plugin {
     return 2; // Levels 1-4
   }
 
+  // Na classe RPGLevelsPlugin, substitua a função inteira por esta versão final:
   public async updateTempHP() {
     let maxPotentialTempHP = 0;
-    
+    const health = this.settings.health;
+
     const allBonusSourcesPaths = [
         ...this.settings.obtainedFeats,
-        ...this.settings.obtainedClassFeats,
         ...Object.values(this.settings.effects)
             .filter(effect => effect.active && !this.isEffectExpired(effect))
             .map(effect => effect.notePath)
     ];
     
-    // Inclui a classe e subclasse como possíveis fontes de HP temporário
     if (this.settings.class) allBonusSourcesPaths.push(this.settings.class);
     if (this.settings.subclass) allBonusSourcesPaths.push(this.settings.subclass);
 
-    // Encontra o maior valor de HP temporário de todas as fontes ativas
     for (const sourcePath of [...new Set(allBonusSourcesPaths)]) {
         const effectData = await this.loadEffectDataWithLevels(sourcePath, this.settings.level);
         if (effectData.tempHP && typeof effectData.tempHP === "number") {
@@ -360,18 +360,27 @@ export default class RPGLevelsPlugin extends Plugin {
         }
     }
 
-    // Lógica crucial:
-    // Se a fonte de temp HP foi removida, o HP temporário atual não pode ser maior que o novo máximo.
-    if ((this.settings.health.tempHP || 0) > maxPotentialTempHP) {
-        this.settings.health.tempHP = maxPotentialTempHP;
-    }
+    const lastMaxPotential = health.lastMaxPotentialTempHP || 0;
+    const currentTempHP = health.tempHP || 0;
 
-    // Se uma nova fonte de temp HP for maior que a atual, ela a substitui.
-    // Isso permite ganhar um bônus de temp HP maior de um novo efeito.
-    if (maxPotentialTempHP > (this.settings.health.tempHP || 0)) {
-        this.settings.health.tempHP = maxPotentialTempHP;
+    // Cenário 1: Você ganhou um efeito NOVO que dá MAIS temp HP do que antes.
+    // O novo "teto" de temp HP substitui o antigo, incluindo qualquer valor depletado.
+    if (maxPotentialTempHP > lastMaxPotential) {
+        health.tempHP = maxPotentialTempHP;
+    } 
+    // Cenário 2: Você perdeu um efeito, e seu "teto" de temp HP diminuiu.
+    // Seu temp HP atual não pode ser maior que este novo teto.
+    else if (maxPotentialTempHP < lastMaxPotential) {
+        if (currentTempHP > maxPotentialTempHP) {
+            health.tempHP = maxPotentialTempHP;
+        }
     }
- }
+    // Se maxPotentialTempHP for igual a lastMaxPotential, nada acontece.
+    // Isso impede que o dano seja "curado" por um recálculo normal.
+
+    // Finalmente, atualizamos a "memória" com o novo teto para a próxima vez.
+    health.lastMaxPotentialTempHP = maxPotentialTempHP;
+  }
 
   // Na classe RPGLevelsPlugin
   public async performLongRest() {
@@ -1088,7 +1097,7 @@ async applyAllPassiveEffects() {
     this.settings.proficiencyBonus = this.calculateProficiencyBonus();
 
     // 8. SALVAR AS CONFIGURAÇÕES
-    
+     await this.updateTempHP();
     await this.saveSettings();
 }
 

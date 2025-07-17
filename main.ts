@@ -340,47 +340,39 @@ export default class RPGLevelsPlugin extends Plugin {
 
   // Na classe RPGLevelsPlugin, substitua a função inteira por esta versão final:
   public async updateTempHP() {
-    let maxPotentialTempHP = 0;
-    const health = this.settings.health;
+  const health = this.settings.health;
 
-    const allBonusSourcesPaths = [
-        ...this.settings.obtainedFeats,
-        ...Object.values(this.settings.effects)
-            .filter(effect => effect.active && !this.isEffectExpired(effect))
-            .map(effect => effect.notePath)
-    ];
-    
-    if (this.settings.class) allBonusSourcesPaths.push(this.settings.class);
-    if (this.settings.subclass) allBonusSourcesPaths.push(this.settings.subclass);
+  let maxPotentialEffectHP = 0;
 
-    for (const sourcePath of [...new Set(allBonusSourcesPaths)]) {
-        const effectData = await this.loadEffectDataWithLevels(sourcePath, this.settings.level);
-        if (effectData.tempHP && typeof effectData.tempHP === "number") {
-            maxPotentialTempHP = Math.max(maxPotentialTempHP, effectData.tempHP);
-        }
+  const allBonusSourcesPaths = [
+    ...this.settings.obtainedFeats,
+    ...Object.values(this.settings.effects)
+      .filter(effect => effect.active && !this.isEffectExpired(effect))
+      .map(effect => effect.notePath),
+  ];
+
+  if (this.settings.class) allBonusSourcesPaths.push(this.settings.class);
+  if (this.settings.subclass) allBonusSourcesPaths.push(this.settings.subclass);
+
+  for (const sourcePath of [...new Set(allBonusSourcesPaths)]) {
+    const effectData = await this.loadEffectDataWithLevels(sourcePath, this.settings.level);
+    if (effectData.tempHP && typeof effectData.tempHP === "number") {
+      maxPotentialEffectHP = Math.max(maxPotentialEffectHP, effectData.tempHP);
     }
-
-    const lastMaxPotential = health.lastMaxPotentialTempHP || 0;
-    const currentTempHP = health.tempHP || 0;
-
-    // Cenário 1: Você ganhou um efeito NOVO que dá MAIS temp HP do que antes.
-    // O novo "teto" de temp HP substitui o antigo, incluindo qualquer valor depletado.
-    if (maxPotentialTempHP > lastMaxPotential) {
-        health.tempHP = maxPotentialTempHP;
-    } 
-    // Cenário 2: Você perdeu um efeito, e seu "teto" de temp HP diminuiu.
-    // Seu temp HP atual não pode ser maior que este novo teto.
-    else if (maxPotentialTempHP < lastMaxPotential) {
-        if (currentTempHP > maxPotentialTempHP) {
-            health.tempHP = maxPotentialTempHP;
-        }
-    }
-    // Se maxPotentialTempHP for igual a lastMaxPotential, nada acontece.
-    // Isso impede que o dano seja "curado" por um recálculo normal.
-
-    // Finalmente, atualizamos a "memória" com o novo teto para a próxima vez.
-    health.lastMaxPotentialTempHP = maxPotentialTempHP;
   }
+
+  const manualTempHP = health.manualTempHP ?? 0;
+  const currentTempHP = health.tempHP ?? 0;
+
+  // Novo Temp HP é o maior valor entre: o atual, o manual, ou os efeitos ativos
+  const newTempHP = Math.max(currentTempHP, manualTempHP, maxPotentialEffectHP);
+  health.tempHP = newTempHP;
+
+  // Atualiza o teto armazenado, mesmo que ele não seja usado para reduzir
+  health.lastMaxPotentialTempHP = maxPotentialEffectHP;
+
+  await this.saveSettings();
+ }
 
   // Na classe RPGLevelsPlugin
   public async performLongRest() {
@@ -441,6 +433,12 @@ export default class RPGLevelsPlugin extends Plugin {
     return loadedSkills;
   }
   
+  resolveFeatNamesToPaths(names: string[], availablePaths: string[]): string[] {
+  return names.map(name => {
+    return availablePaths.find(path => path.endsWith(`${name}.md`));
+  }).filter(Boolean) as string[];
+  }
+
 
  public getEffectsFromSpecificFolder(folderPath: string, activeEffectPathsToExclude: string[] = [], allowDuplicates: boolean): TFile[] {
     const folder = this.app.vault.getAbstractFileByPath(folderPath);
@@ -2311,10 +2309,14 @@ class HPManagementModal extends Modal {
     let featHPBonus = 0;
     let effectHPBonus = 0;
 
-    for (const path of this.plugin.settings.obtainedFeats) {
+    const availableFeats = this.plugin.getAvailableFeatsFromFolders();
+    const resolvedFeatPaths = this.plugin.resolveFeatNamesToPaths(this.plugin.settings.obtainedFeats, availableFeats);
+
+    for (const path of resolvedFeatPaths) {
       const data = await this.plugin.loadEffectFromNote(path);
-      if (typeof data.hpBonus === "number") featHPBonus += data.hpBonus;
+     if (typeof data.hpBonus === "number") featHPBonus += data.hpBonus;
     }
+
 
     const activeEffects = Object.values(this.plugin.settings.effects)
       .filter(e => e.active && !this.plugin.isEffectExpired(e));

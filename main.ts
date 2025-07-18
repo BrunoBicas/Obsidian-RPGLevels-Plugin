@@ -1,5 +1,7 @@
 import { App, Plugin, PluginSettingTab, Setting, TFile, MarkdownView, Notice, Modal, TFolder, TAbstractFile, FuzzySuggestModal, MarkdownRenderer } from 'obsidian';
 import { Dice } from "./dice";
+import { ArmorClassModal } from "./ArmorClassModal";
+
 
 
 interface CharacterStats {
@@ -14,6 +16,13 @@ interface CharacterStats {
 interface SpeedSettings {
   baseSpeed: number;
   additionalSpeeds: Record<string, { type: string; value: number; sources: string[] }>;
+}
+
+interface ArmorClassData {
+	base: number; // ex: 10 
+	modifierAbility: keyof CharacterStats | null; // geralmente "Dexterity"
+	bonus: number; // bônus fixo, ex: +1 de anel
+	sources: string[]; // notas ou efeitos que contribuíram
 }
 
 interface VisionSenseData {
@@ -114,6 +123,8 @@ interface RPGLevelsSettings {
 	};
 	
 	health: HealthData;
+
+  armorClass: ArmorClassData;
 
 	trainingLog: Record<number, TrainingEntry>;
 
@@ -232,6 +243,14 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
     senses: {}
   },
 
+  armorClass: {
+	base: 10,
+	modifierAbility: "Dexterity",
+	bonus: 0,
+	sources: []
+  },
+
+
   healthModalNotePath: '',   // NEW
   speedModalNotePath: '',    // NEW
   visionModalNotePath: '',   // NEW
@@ -330,6 +349,15 @@ export default class RPGLevelsPlugin extends Plugin {
  public getAbilityModifier(statValue: number): number {
     return Math.floor((statValue - 10) / 2);
  }
+
+ public getCurrentAC(): number {
+	const ac = this.settings.armorClass;
+	const mod = ac.modifierAbility
+		? this.getAbilityModifier(this.settings.characterStats[ac.modifierAbility])
+		: 0;
+	return ac.base + mod + ac.bonus;
+ }
+
   // Calculate Proficiency Bonus based on D&D 5e rules
  public calculateProficiencyBonus(): number {
     const level = this.settings.level;
@@ -533,6 +561,15 @@ export default class RPGLevelsPlugin extends Plugin {
       new SpeedModal(this.app, this).open();
     }
     });
+
+    this.addCommand({
+   id: "view-armor-class",
+   name: "Ver Classe de Armadura (AC)",
+   callback: () => {
+    new ArmorClassModal(this.app, this).open();
+   }
+   });
+
 		
 		
 		// Add settings tab
@@ -950,6 +987,27 @@ async applyAllPassiveEffects() {
                 }
             });
         }
+        
+        if (effectData.acBase && typeof effectData.acBase === "number") {
+	     this.settings.armorClass.base = effectData.acBase;
+	     if (!this.settings.armorClass.sources.includes(sourcePath)) {
+		   this.settings.armorClass.sources.push(sourcePath);
+	      }
+       }
+       if (effectData.acBonus && typeof effectData.acBonus === "number") {
+	     this.settings.armorClass.bonus += effectData.acBonus;
+	     if (!this.settings.armorClass.sources.includes(sourcePath)) {
+	    	this.settings.armorClass.sources.push(sourcePath);
+	      }
+       }
+       if (effectData.acModifier && typeof effectData.acModifier === "string" &&
+	     ["Strength", "Dexterity", "Constitution", "Intelligence", "Wisdom", "Charisma"].includes(effectData.acModifier)) {
+	     this.settings.armorClass.modifierAbility = effectData.acModifier as keyof CharacterStats;
+      	if (!this.settings.armorClass.sources.includes(sourcePath)) {
+	    	this.settings.armorClass.sources.push(sourcePath);
+	      }
+       }
+
         
         // Perícias (Skills)
         const processSkillLevel = (skillName: string, level: "proficient" | "expert") => {
@@ -1544,6 +1602,7 @@ async applyAllPassiveEffects() {
 						<li>Links Created: ${this.linkCount}</li>
 						<li>Daily Streak: ${this.settings.streakDays} days</li>
 						<li>Achievements: ${achievementsEarned}/${achievementsTotal}</li>
+            <li>Armor Class (AC): ${this.getCurrentAC()}</li>
 					</ul>
 				</div>
 				

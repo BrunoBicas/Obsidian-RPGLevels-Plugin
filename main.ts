@@ -58,6 +58,7 @@ interface HealthData {
   currentHP: number;
   tempHP: number; // This will store temp HP from items/effects
   manualTempHP?: number; // Temp HP from manual grants
+  tempHPDamage?: number;
   lastMaxHP: number;
   lastMaxPotentialTempHP?: number;
 }
@@ -194,7 +195,8 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
   currentHP: 8,
   lastMaxHP: 0,
   tempHP: 0, // Temp HP from items/effects
-  manualTempHP: 0 // Temp HP from manual grants
+  manualTempHP: 0, // Temp HP from manual grants
+  tempHPDamage: 0 
  },
 
     trainingLog: {},
@@ -338,10 +340,20 @@ export default class RPGLevelsPlugin extends Plugin {
     return 2; // Levels 1-4
   }
 
+  public getEffectiveTempHP(): number {
+    const health = this.settings.health;
+    // O maior pool potencial de Temp HP de qualquer fonte
+    const highestPotentialPool = Math.max(health.tempHP || 0, health.manualTempHP || 0);
+    // O dano que a reserva de Temp HP já sofreu
+    const damageSustained = health.tempHPDamage || 0;
+    // O valor atual é o pool potencial menos o dano sofrido
+    const currentTempHP = highestPotentialPool - damageSustained;
+    return Math.max(0, currentTempHP);
+  }
+
   // Na classe RPGLevelsPlugin, substitua a função inteira por esta versão final:
   public async updateTempHP() {
   const health = this.settings.health;
-
   let maxPotentialEffectHP = 0;
 
   const allBonusSourcesPaths = [
@@ -350,7 +362,6 @@ export default class RPGLevelsPlugin extends Plugin {
       .filter(effect => effect.active && !this.isEffectExpired(effect))
       .map(effect => effect.notePath),
   ];
-
   if (this.settings.class) allBonusSourcesPaths.push(this.settings.class);
   if (this.settings.subclass) allBonusSourcesPaths.push(this.settings.subclass);
 
@@ -361,16 +372,8 @@ export default class RPGLevelsPlugin extends Plugin {
     }
   }
 
-  const manualTempHP = health.manualTempHP ?? 0;
-  const currentTempHP = health.tempHP ?? 0;
-
-  // Novo Temp HP é o maior valor entre: o atual, o manual, ou os efeitos ativos
-  const newTempHP = Math.max(currentTempHP, manualTempHP, maxPotentialEffectHP);
-  health.tempHP = newTempHP;
-
-  // Atualiza o teto armazenado, mesmo que ele não seja usado para reduzir
-  health.lastMaxPotentialTempHP = maxPotentialEffectHP;
-
+  // Apenas define o TETO MÁXIMO de Temp HP vindo de efeitos.
+  health.tempHP = maxPotentialEffectHP;
   await this.saveSettings();
  }
 
@@ -384,6 +387,7 @@ export default class RPGLevelsPlugin extends Plugin {
     // 2. Remove todo o HP temporário (manual e de efeitos)
     health.tempHP = 0;
     health.manualTempHP = 0;
+    health.tempHPDamage = 0;
     
     new Notice("Long rest complete. HP is fully restored and temporary HP is removed.");
 
@@ -2558,27 +2562,28 @@ class DamageModal extends Modal {
     };
   }
 
-  displayCurrentHP(container: HTMLElement) { /* ... (como na resposta anterior) ... */
+  displayCurrentHP(container: HTMLElement) {
     const health = this.plugin.settings.health;
     const hpContainer = container.createDiv({ cls: "hp-display-container" });
     hpContainer.style.padding = "10px";
     hpContainer.style.backgroundColor = "var(--background-secondary)";
     hpContainer.style.borderRadius = "5px";
     hpContainer.style.marginBottom = "15px";
-
     hpContainer.createEl("h4", { text: "Current Health Status" });
     hpContainer.createEl("p", {
       text: `❤️ HP: ${health.currentHP} / ${health.maxHP}`,
     });
-    const effectiveTempHP = this.getEffectiveTempHP();
+    // AGORA CHAMA O NOVO MÉTODO DO PLUGIN
+    const effectiveTempHP = this.plugin.getEffectiveTempHP();
     hpContainer.createEl("p", {
       text: `🛡️ Effective Temporary HP: ${effectiveTempHP}`,
     });
     hpContainer.createEl("p", {
-        text: `(Sources: ${health.tempHP || 0} from items/effects, ${health.manualTempHP || 0} from manual grant)`,
-        cls: "setting-item-description" 
+        text: `(Potential Pool: ${Math.max(health.tempHP || 0, health.manualTempHP || 0)}, Damage Taken: ${health.tempHPDamage || 0})`,
+        cls: "setting-item-description"
     });
   }
+
   
   // Na classe DamageModal
   async applyDamage(damageAmount: number, damageType: string, sourceDescription: string) {
@@ -2592,7 +2597,7 @@ class DamageModal extends Modal {
     const defenses = this.plugin.settings.defenses;
     let defenseMessage = "";
 
-    // Apply immunities and resistances 
+    // Aplica imunidades e resistências
     if (damageType !== 'Typeless') {
         if (defenses.immunities && defenses.immunities[damageType] && defenses.immunities[damageType].length > 0) {
             finalDamage = 0;
@@ -2604,6 +2609,7 @@ class DamageModal extends Modal {
     }
     
     new Notice(`${sourceDescription} for ${initialDamage} ${damageType} damage. ${defenseMessage || `Effective: ${finalDamage}`}`);
+    
     if (finalDamage === 0) {
         this.onOpen();
         return;
@@ -2611,31 +2617,28 @@ class DamageModal extends Modal {
 
     const health = this.plugin.settings.health;
     let remainingDamage = finalDamage;
-    let effectiveTempHP = this.getEffectiveTempHP();
+    const effectiveTempHP = this.plugin.getEffectiveTempHP(); // Usa a nova função central
 
-    // Corrected logic for reducing temporary HP
+    // NOVA LÓGICA: Aplica dano ao Temp HP aumentando o contador `tempHPDamage`
     if (effectiveTempHP > 0 && remainingDamage > 0) {
         const damageAbsorbedByTempHP = Math.min(remainingDamage, effectiveTempHP);
-        const newTempHPValue = effectiveTempHP - damageAbsorbedByTempHP;
-
-        // The problem is that health.tempHP is reset by other functions.
-        // The workaround is to store the new, depleted state of the entire pool
-        // in the persistent health.manualTempHP and clear the volatile health.tempHP.
-        health.manualTempHP = newTempHPValue;
-        health.tempHP = newTempHPValue; // Also set this for immediate display consistency.
-
+        
+        // Aumenta a "força contrária"
+        health.tempHPDamage = (health.tempHPDamage || 0) + damageAbsorbedByTempHP;
+        
         remainingDamage -= damageAbsorbedByTempHP;
         new Notice(`Absorbed ${damageAbsorbedByTempHP} damage with Temporary HP.`);
     }
 
+    // Aplica o dano restante ao HP normal
     if (remainingDamage > 0) {
         health.currentHP = Math.max(0, health.currentHP - remainingDamage);
         new Notice(`Dealt ${remainingDamage} to Current HP.`);
     }
     
     await this.plugin.saveSettings();
-    this.onOpen();
-  }
+    this.onOpen(); // Atualiza o modal
+ }
   
   parseAndRollDice(diceString: string): number | null { /* ... (como na resposta anterior) ... */
     diceString = diceString.replace(/\s/g, ''); 

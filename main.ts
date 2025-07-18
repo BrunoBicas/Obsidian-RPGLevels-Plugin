@@ -351,6 +351,18 @@ export default class RPGLevelsPlugin extends Plugin {
     return Math.max(0, currentTempHP);
   }
 
+  public async healTempHP(amount: number): Promise<void> {
+  const health = this.settings.health;
+  const maxTemp = Math.max(health.tempHP || 0, health.manualTempHP || 0);
+  const currentTemp = maxTemp - (health.tempHPDamage || 0);
+  const missingTemp = maxTemp - currentTemp;
+
+  const healAmount = Math.min(amount, missingTemp);
+  health.tempHPDamage = Math.max((health.tempHPDamage || 0) - healAmount, 0);
+
+  await this.saveSettings();
+  new Notice(`Curou ${healAmount} de HP Temporário.`);
+ }
   // Na classe RPGLevelsPlugin, substitua a função inteira por esta versão final:
   public async updateTempHP() {
   const health = this.settings.health;
@@ -379,6 +391,7 @@ export default class RPGLevelsPlugin extends Plugin {
 
   // Na classe RPGLevelsPlugin
   public async performLongRest() {
+    await this.applyAllPassiveEffects();
     const health = this.settings.health;
 
     // 1. Recupera todo o HP
@@ -2838,6 +2851,26 @@ class DamageModal extends Modal {
             this.onOpen(); 
           })
       );
+
+      // ===== Input e botão para CURAR HP TEMPORÁRIO =====
+    this.contentEl.createEl("h3", { text: "💖🛡️ Curar HP Temporário" });
+
+ const healTempInput = this.contentEl.createEl("input", {
+  type: "number",
+  placeholder: "Ex: 5"
+ });
+ healTempInput.style.marginRight = "10px";
+
+ const healTempBtn = this.contentEl.createEl("button", { text: "Curar Temp HP" });
+ healTempBtn.onclick = async () => {
+  const amount = parseInt(healTempInput.value);
+  if (isNaN(amount) || amount <= 0) {
+    new Notice("Digite um valor válido para curar Temp HP.");
+    return;
+  }
+  await this.plugin.healTempHP(amount); 
+ };
+
   }
 
   // Modificado para lista de efeitos recolhível por pasta

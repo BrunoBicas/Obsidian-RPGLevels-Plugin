@@ -1973,12 +1973,21 @@ class StatsModal extends Modal {
       } else {
         imgContainer.createEl("p", { text: `⚠️ Arquivo de imagem inválido ou não encontrado: ${imgPath}` });
       }
-    } 
+    }    
+ const health = this.plugin.settings.health;
+ const effectiveTempHP = this.plugin.getEffectiveTempHP(); // Usa a nova função
 
-    const health = this.plugin.settings.health;
  contentEl.createEl("h3", { text: "❤️ Health" });
  contentEl.createEl("p", {
-  text: `HP: ${health.currentHP}/${health.maxHP} + (${health.tempHP} Temp)`
+  // Mostra o HP efetivo
+  text: `HP: ${health.currentHP}/${health.maxHP} + (${effectiveTempHP} Temp)`
+ });
+ // NOVO: Adiciona o detalhamento para maior clareza
+ const potentialPool = Math.max(health.tempHP || 0, health.manualTempHP || 0);
+ const damageSustained = health.tempHPDamage || 0;
+ contentEl.createEl("p", {
+    text: `(Pool Potencial: ${potentialPool}, Dano Sofrido: ${damageSustained})`,
+    cls: "setting-item-description" // Usa uma classe para estilo sutil
  });
 
  let featHpBonus = 0;
@@ -2333,13 +2342,24 @@ class HPManagementModal extends Modal {
     const totalBonus = featHPBonus + effectHPBonus;
 
     // Exibir status atual
-    contentEl.createEl("h3", {
-      text: `❤️ HP Atual: ${health.currentHP}/${health.maxHP}`
-    });
+    
+  const effectiveTempHP = this.plugin.getEffectiveTempHP(); // Usa a nova função
 
-    contentEl.createEl("p", {
-      text: `🧪 HP Temporário: ${health.tempHP}`
-    });
+   // Exibir status atual
+  contentEl.createEl("h3", {
+  text: `❤️ HP Atual: ${health.currentHP}/${health.maxHP}`
+  });
+  contentEl.createEl("p", {
+  // Mostra o HP temporário efetivo
+  text: `🧪 HP Temporário Efetivo: ${effectiveTempHP}`
+  });
+  // NOVO: Adiciona o detalhamento
+  const potentialPool = Math.max(health.tempHP || 0, health.manualTempHP || 0);
+ const damageSustained = health.tempHPDamage || 0;
+ contentEl.createEl("p", {
+    text: `(Pool Potencial: ${potentialPool}, Dano Sofrido: ${damageSustained})`,
+    cls: "setting-item-description"
+  });
 
     if (this.plugin.settings.healthModalNotePath) {
     const openNoteBtn = contentEl.createEl("button", { text: "📘 Open Health Details Note" });

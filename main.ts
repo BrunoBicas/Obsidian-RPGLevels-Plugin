@@ -2080,6 +2080,17 @@ class StatsModal extends Modal {
     const subClassBaseName = this.plugin.settings.subclass ? ` / ${this.plugin.settings.subclass.split('/').pop()?.replace('.md', '')}` : '';
     contentEl.createEl("h2", { text: `Level ${this.plugin.settings.level} ${classBaseName}${subClassBaseName}` });
     contentEl.createEl("p", { text: `(Proficiency Bonus: +${proficiencyBonus})`, cls: "setting-item-description", attr: { style: 'text-align: center; margin-top: -10px; margin-bottom: 15px;' }});
+       
+    // === Classe de Armadura (AC) ===
+    contentEl.createEl("h3", { text: "AC" });
+
+   const acDiv = contentEl.createDiv();
+   acDiv.style.marginBottom = "10px";
+   acDiv.setText(`AC Total: ${this.plugin.getCurrentAC()}`);
+   const acButton = contentEl.createEl("button", { text: "Ver detalhes de AC" });
+   acButton.onclick = () => {
+   new ArmorClassModal(this.app, this.plugin).open();
+   };
 
     // --- Management Buttons ---
     const buttonContainer = contentEl.createDiv({ cls: "modal-button-container" });
@@ -2682,7 +2693,7 @@ class DamageModal extends Modal {
     if (damageAmount < 0) {
         new Notice("Damage cannot be negative.");
         return;
-    }
+    }   
 
     const initialDamage = damageAmount;
     let finalDamage = damageAmount;

@@ -2689,7 +2689,7 @@ class DamageModal extends Modal {
 
   
   // Na classe DamageModal
-  async applyDamage(damageAmount: number, damageType: string, sourceDescription: string) {
+  async applyDamage(damageAmount: number, damageType: string, sourceDescription: string, attackRoll: number) {
     if (damageAmount < 0) {
         new Notice("Damage cannot be negative.");
         return;
@@ -2699,6 +2699,17 @@ class DamageModal extends Modal {
     let finalDamage = damageAmount;
     const defenses = this.plugin.settings.defenses;
     let defenseMessage = "";
+
+    const currentAC = this.plugin.getCurrentAC();
+    
+    if (attackRoll < currentAC) {
+        new Notice(`Miss! Attack roll ${attackRoll} vs AC ${currentAC}. No damage taken.`);
+        this.onOpen(); // Apenas atualiza o modal
+        return; // A função para aqui. Nenhum dano é aplicado.
+    }
+    
+    new Notice(`Hit! Attack roll ${attackRoll} vs AC ${currentAC}.`);
+
 
     // Aplica imunidades e resistências
     if (damageType !== 'Typeless') {
@@ -2784,6 +2795,16 @@ class DamageModal extends Modal {
   createDamageSection(container: HTMLElement) {
     const section = container.createDiv({ cls: "damage-section" });
     section.createEl("h3", { text: "💥 Deal Damage" });
+
+    let attackRollValue = 0; // Variável para guardar o valor do ataque
+    new Setting(section)
+        .setName("Attack Roll")
+        .setDesc("The result of the opponent's attack roll (e.g., d20 + modifiers).")
+        .addText((text) =>
+            text.setPlaceholder("Enter attack roll").onChange((value) => {
+                attackRollValue = parseInt(value) || 0;
+            })
+        );
     
     // Damage Type Selector - Comum para ambas as seções de dano
     const damageTypeSetting = new Setting(section)
@@ -2818,7 +2839,7 @@ class DamageModal extends Modal {
                 return;
             }
             // Usa this.selectedDamageType que é atualizado pelo dropdown
-            await this.applyDamage(manualDamageAmount, this.selectedDamageType, "Manually applied"); 
+            await this.applyDamage(manualDamageAmount,  this.selectedDamageType, "Manually applied", attackRollValue); 
           })
       );
     
@@ -2843,7 +2864,7 @@ class DamageModal extends Modal {
                 const rolledDamage = this.parseAndRollDice(diceString);
                 if (rolledDamage === null) return;
                 // Usa this.selectedDamageType que é atualizado pelo dropdown
-                await this.applyDamage(rolledDamage, this.selectedDamageType, `Rolled ${diceString}`); 
+                await this.applyDamage(rolledDamage, this.selectedDamageType, `Rolled ${diceString}`, attackRollValue); 
             })
         );
   }

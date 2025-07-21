@@ -2689,7 +2689,7 @@ class DamageModal extends Modal {
 
   
   // Na classe DamageModal
-  async applyDamage(damageAmount: number, damageType: string, sourceDescription: string, attackRoll: number) {
+  async applyDamage(defenseType: string, checkValue: number, damageAmount: number, damageType: string, sourceDescription: string) {
     if (damageAmount < 0) {
         new Notice("Damage cannot be negative.");
         return;
@@ -2700,15 +2700,54 @@ class DamageModal extends Modal {
     const defenses = this.plugin.settings.defenses;
     let defenseMessage = "";
 
-    const currentAC = this.plugin.getCurrentAC();
-    
-    if (attackRoll < currentAC) {
-        new Notice(`Miss! Attack roll ${attackRoll} vs AC ${currentAC}. No damage taken.`);
-        this.onOpen(); // Apenas atualiza o modal
-        return; // A função para aqui. Nenhum dano é aplicado.
-    }
-    
-    new Notice(`Hit! Attack roll ${attackRoll} vs AC ${currentAC}.`);
+   let isHit = true; // Assume que o ataque acerta
+
+   switch(defenseType) {
+    case 'AC':
+        if (checkValue <= 0) return new Notice("Please enter a positive attack roll.");
+        const currentAC = this.plugin.getCurrentAC();
+        if (checkValue < currentAC) {
+            isHit = false;
+            new Notice(`Miss! Attack roll ${checkValue} vs AC ${currentAC}. No damage taken.`);
+        } else {
+            new Notice(`Hit! Attack roll ${checkValue} vs AC ${currentAC}.`);
+        }
+        break;
+
+    case 'StrengthSave':
+    case 'DexteritySave':
+    case 'ConstitutionSave':
+    case 'IntelligenceSave':
+    case 'WisdomSave':
+    case 'CharismaSave':
+        if (checkValue <= 0) return new Notice("Please enter a positive Save DC.");
+        const abilityName = defenseType.replace('Save', '') as keyof CharacterStats;
+        const settings = this.plugin.settings;
+        const abilityScore = settings.characterStats[abilityName];
+        const modifier = this.plugin.getAbilityModifier(abilityScore);
+        const proficiencyBonus = settings.proficiencyBonus;
+        const saveProfData = settings.proficiencies[defenseType.charAt(0).toLowerCase() + defenseType.slice(1)] || { level: "none" };
+
+        let saveBonus = modifier;
+        if (saveProfData.level === "proficient") saveBonus += proficiencyBonus;
+        else if (saveProfData.level === "expert") saveBonus += (proficiencyBonus * 2);
+
+        const saveRoll = new Dice(20).roll();
+        const totalRoll = saveRoll + saveBonus;
+
+        if (totalRoll >= checkValue) {
+            isHit = false;
+            new Notice(`Save Succeeded! Roll ${totalRoll} (d20:${saveRoll} + bonus:${saveBonus}) vs DC ${checkValue}. No damage taken.`);
+        } else {
+            new Notice(`Save Failed! Roll ${totalRoll} (d20:${saveRoll} + bonus:${saveBonus}) vs DC ${checkValue}.`);
+        }
+        break;
+   }
+
+   if (!isHit) {
+    this.onOpen();
+    return;
+   }
 
 
     // Aplica imunidades e resistências
@@ -2796,7 +2835,10 @@ class DamageModal extends Modal {
     const section = container.createDiv({ cls: "damage-section" });
     section.createEl("h3", { text: "💥 Deal Damage" });
 
+    let defenseType = 'AC'; // Para guardar o tipo de defesa escolhido
+    let saveDCValue = 0;   // Para guardar a CD do save
     let attackRollValue = 0; // Variável para guardar o valor do ataque
+    
     new Setting(section)
         .setName("Attack Roll")
         .setDesc("The result of the opponent's attack roll (e.g., d20 + modifiers).")
@@ -2805,7 +2847,36 @@ class DamageModal extends Modal {
                 attackRollValue = parseInt(value) || 0;
             })
         );
-    
+
+    const attackRollSetting = new Setting(section)
+
+    const saveDCSetting = new Setting(section)
+    .setName("Save Difficulty Class (DC)")
+    .addText(text => text.setPlaceholder("Enter DC").onChange(value => {
+        saveDCValue = parseInt(value) || 0;
+    }));
+
+    new Setting(section)
+    .setName("Defense Type")
+    .addDropdown(dropdown => {
+        dropdown
+            .addOption('None', 'None (Direct Damage)')
+            .addOption('AC', 'Armor Class (AC)')
+            .addOption('StrengthSave', 'Strength Save')
+            .addOption('DexteritySave', 'Dexterity Save')
+            .addOption('ConstitutionSave', 'Constitution Save')
+            .addOption('IntelligenceSave', 'Intelligence Save')
+            .addOption('WisdomSave', 'Wisdom Save')
+            .addOption('CharismaSave', 'Charisma Save')
+            .setValue(defenseType)
+            .onChange(value => {
+                defenseType = value;
+                // Lógica para mostrar/esconder os inputs
+                attackRollSetting.settingEl.style.display = (defenseType === 'AC') ? 'flex' : 'none';
+                saveDCSetting.settingEl.style.display = (defenseType.includes('Save')) ? 'flex' : 'none';
+            });
+    });
+
     // Damage Type Selector - Comum para ambas as seções de dano
     const damageTypeSetting = new Setting(section)
         .setName("Damage Type")
@@ -2839,7 +2910,7 @@ class DamageModal extends Modal {
                 return;
             }
             // Usa this.selectedDamageType que é atualizado pelo dropdown
-            await this.applyDamage(manualDamageAmount,  this.selectedDamageType, "Manually applied", attackRollValue); 
+             await this.applyDamage(defenseType, attackRollValue || saveDCValue, manualDamageAmount, this.selectedDamageType, "Manually applied");
           })
       );
     
@@ -2864,7 +2935,7 @@ class DamageModal extends Modal {
                 const rolledDamage = this.parseAndRollDice(diceString);
                 if (rolledDamage === null) return;
                 // Usa this.selectedDamageType que é atualizado pelo dropdown
-                await this.applyDamage(rolledDamage, this.selectedDamageType, `Rolled ${diceString}`, attackRollValue); 
+                 await this.applyDamage(defenseType, attackRollValue || saveDCValue, rolledDamage, this.selectedDamageType, `Rolled ${diceString}`);
             })
         );
   }

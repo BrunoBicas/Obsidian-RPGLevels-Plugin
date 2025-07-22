@@ -2689,7 +2689,7 @@ class DamageModal extends Modal {
 
   
   // Na classe DamageModal
-  async applyDamage(defenseType: string, checkValue: number, damageAmount: number, damageType: string, sourceDescription: string) {
+  async applyDamage(defenseType: string, checkValue: number, damageAmount: number, damageType: string, sourceDescription: string, effectPath: string | null) {
     if (damageAmount < 0) {
         new Notice("Damage cannot be negative.");
         return;
@@ -2788,6 +2788,24 @@ class DamageModal extends Modal {
         health.currentHP = Math.max(0, health.currentHP - remainingDamage);
         new Notice(`Dealt ${remainingDamage} to Current HP.`);
     }
+
+    // Adiciona effect
+    if (effectPath) {
+    const effectId = `eff_${Date.now()}`;
+    this.plugin.settings.effects[effectId] = {
+        notePath: effectPath,
+        startDate: new Date().toISOString(),
+        durationDays: 1, // Pode configurar uma duração padrão ou buscar do frontmatter
+        permanent: false,
+        active: true
+    };
+    new Notice(`Effect "${effectPath.split('/').pop()}" applied.`);
+    
+    // Recalcula todos os status para que os bônus/penalidades do efeito sejam aplicados imediatamente
+    await this.plugin.applyAllPassiveEffects();
+    }
+
+
     
     await this.plugin.saveSettings();
     this.onOpen(); // Atualiza o modal
@@ -2838,6 +2856,7 @@ class DamageModal extends Modal {
     let defenseType = 'AC'; // Para guardar o tipo de defesa escolhido
     let saveDCValue = 0;   // Para guardar a CD do save
     let attackRollValue = 0; // Variável para guardar o valor do ataque
+    let selectedEffectPath: string | null = null;
     
     new Setting(section)
         .setName("Attack Roll")
@@ -2877,6 +2896,27 @@ class DamageModal extends Modal {
             });
     });
 
+    //effects selector
+    const availableUniqueEffects = this.plugin.getAvailableEffectsFromFolders(); 
+    const availableRepeatableEffects = this.plugin.getAvailableRepeatableEffects(); 
+    const allAvailableEffects = [...new Set([...availableUniqueEffects, ...availableRepeatableEffects])]; // Combina e remove duplicatas
+
+   new Setting(section)
+    .setName("Apply Effect (Optional)")
+    .setDesc("Applies an effect along with the damage.")
+    .addDropdown(dropdown => {
+        dropdown.addOption('null', 'None'); // Opção para não aplicar nenhum efeito
+
+        allAvailableEffects.forEach(effectPath => {
+            const fileName = effectPath.substring(effectPath.lastIndexOf('/') + 1);
+            dropdown.addOption(effectPath, fileName);
+        });
+
+        dropdown.onChange(value => {
+            selectedEffectPath = (value === 'null') ? null : value;
+        });
+    });
+
     // Damage Type Selector - Comum para ambas as seções de dano
     const damageTypeSetting = new Setting(section)
         .setName("Damage Type")
@@ -2910,7 +2950,7 @@ class DamageModal extends Modal {
                 return;
             }
             // Usa this.selectedDamageType que é atualizado pelo dropdown
-             await this.applyDamage(defenseType, attackRollValue || saveDCValue, manualDamageAmount, this.selectedDamageType, "Manually applied");
+             await this.applyDamage(defenseType, attackRollValue || saveDCValue, manualDamageAmount, this.selectedDamageType, "Manually applied", selectedEffectPath);
           })
       );
     
@@ -2935,7 +2975,7 @@ class DamageModal extends Modal {
                 const rolledDamage = this.parseAndRollDice(diceString);
                 if (rolledDamage === null) return;
                 // Usa this.selectedDamageType que é atualizado pelo dropdown
-                 await this.applyDamage(defenseType, attackRollValue || saveDCValue, rolledDamage, this.selectedDamageType, `Rolled ${diceString}`);
+                 await this.applyDamage(defenseType, attackRollValue || saveDCValue, rolledDamage, this.selectedDamageType, this.selectedDamageType, `Rolled ${diceString}`);
             })
         );
   }
@@ -3097,12 +3137,12 @@ class DamageModal extends Modal {
       }
       return availableEffects;
   }
-// How to integrate it:
-// You can add a button to your HPManagementModal to open this new DamageModal.
-// Find the `onOpen()` method of `HPManagementModal` and add this towards the end:
+ // How to integrate it:
+ // You can add a button to your HPManagementModal to open this new DamageModal.
+ // Find the `onOpen()` method of `HPManagementModal` and add this towards the end:
 
-/*
-// In HPManagementModal class, inside onOpen() method:
+ /*
+ // In HPManagementModal class, inside onOpen() method:
 
     // ... (existing HPManagementModal content) ...
 
@@ -3119,7 +3159,7 @@ class DamageModal extends Modal {
     };
 
     // ... (rest of HPManagementModal onOpen like "Curar totalmente" button)
-*/
+ */
  renderEffectEntry(parentElement: HTMLElement, path: string, _isRepeatable: boolean) { /* ... (como na resposta anterior, apenas garanta que parentElement é usado em vez de contentEl diretamente para criar a entrada do efeito) ... */
     const container = parentElement.createDiv({ cls: "effect-entry" });
     container.style.marginBottom = "10px";

@@ -2689,7 +2689,7 @@ class DamageModal extends Modal {
 
   
   // Na classe DamageModal
-  async applyDamage(defenseType: string, checkValue: number, damageAmount: number, damageType: string, sourceDescription: string, effectPath: string | null) {
+  async applyDamage(defenseType: string, checkValue: number, damageAmount: number, damageType: string, sourceDescription: string, effectPaths: string[]) {
     if (damageAmount < 0) {
         new Notice("Damage cannot be negative.");
         return;
@@ -2790,20 +2790,20 @@ class DamageModal extends Modal {
     }
 
     // Adiciona effect
-    if (effectPath) {
-    const effectId = `eff_${Date.now()}`;
-    this.plugin.settings.effects[effectId] = {
-        notePath: effectPath,
-        startDate: new Date().toISOString(),
-        durationDays: 1, // Pode configurar uma duração padrão ou buscar do frontmatter
-        permanent: false,
-        active: true
-    };
-    new Notice(`Effect "${effectPath.split('/').pop()}" applied.`);
-    
-    // Recalcula todos os status para que os bônus/penalidades do efeito sejam aplicados imediatamente
-    await this.plugin.applyAllPassiveEffects();
+    if (effectPaths && effectPaths.length > 0) {
+    for (const effectPath of effectPaths) {
+        const effectId = `eff_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+        this.plugin.settings.effects[effectId] = {
+            notePath: effectPath,
+            startDate: new Date().toISOString(),
+            durationDays: 1,
+            permanent: false,
+            active: true
+        };
     }
+    new Notice(`${effectPaths.length} effect(s) applied along with damage.`);
+    await this.plugin.applyAllPassiveEffects();
+   }
 
 
     
@@ -2854,9 +2854,10 @@ class DamageModal extends Modal {
     section.createEl("h3", { text: "💥 Deal Damage" });
 
     let defenseType = 'AC'; // Para guardar o tipo de defesa escolhido
+    let checkDefenses: boolean = true; 
     let saveDCValue = 0;   // Para guardar a CD do save
     let attackRollValue = 0; // Variável para guardar o valor do ataque
-    let selectedEffectPath: string | null = null;
+    let selectedEffectPaths: string[] = [];
     
     new Setting(section)
         .setName("Attack Roll")
@@ -2896,27 +2897,6 @@ class DamageModal extends Modal {
             });
     });
 
-    //effects selector
-    const availableUniqueEffects = this.plugin.getAvailableEffectsFromFolders(); 
-    const availableRepeatableEffects = this.plugin.getAvailableRepeatableEffects(); 
-    const allAvailableEffects = [...new Set([...availableUniqueEffects, ...availableRepeatableEffects])]; // Combina e remove duplicatas
-
-   new Setting(section)
-    .setName("Apply Effect (Optional)")
-    .setDesc("Applies an effect along with the damage.")
-    .addDropdown(dropdown => {
-        dropdown.addOption('null', 'None'); // Opção para não aplicar nenhum efeito
-
-        allAvailableEffects.forEach(effectPath => {
-            const fileName = effectPath.substring(effectPath.lastIndexOf('/') + 1);
-            dropdown.addOption(effectPath, fileName);
-        });
-
-        dropdown.onChange(value => {
-            selectedEffectPath = (value === 'null') ? null : value;
-        });
-    });
-
     // Damage Type Selector - Comum para ambas as seções de dano
     const damageTypeSetting = new Setting(section)
         .setName("Damage Type")
@@ -2929,6 +2909,113 @@ class DamageModal extends Modal {
                 this.selectedDamageType = value; // Atualiza o valor armazenado
             });
         });
+
+
+    //effects selector
+    const effectsContainer = section.createEl("details"); // Cria um container recolhível
+    effectsContainer.createEl("summary", { text: "Apply Effects (Optional)" });
+
+    const availableUniqueEffects = this.plugin.getAvailableEffectsFromFolders();
+    const availableRepeatableEffects = this.plugin.getAvailableRepeatableEffects();
+    const allAvailableEffects = [...new Set([...availableUniqueEffects, ...availableRepeatableEffects])];
+
+    if (allAvailableEffects.length > 0) {
+     allAvailableEffects.forEach(effectPath => {
+        new Setting(effectsContainer)
+            .setName(effectPath.split('/').pop()?.replace('.md', '') || effectPath)
+            .addToggle(toggle => {
+                toggle.onChange(value => {
+                    if (value) {
+                        // Adiciona o efeito à lista se marcado
+                        if (!selectedEffectPaths.includes(effectPath)) {
+                            selectedEffectPaths.push(effectPath);
+                        }
+                    } else {
+                        // Remove o efeito da lista se desmarcado
+                        selectedEffectPaths = selectedEffectPaths.filter(p => p !== effectPath);
+                    }
+                });
+            });
+     });
+    } else {
+     effectsContainer.createEl("p", { text: "No effect notes found in configured folders.", cls: "setting-item-description" });
+    }
+
+    new Setting(section)
+    .addButton(button => button
+        .setButtonText("Apply Selected Effects (No Damage)")
+        .setCta()
+        .onClick(async () => {
+    if (selectedEffectPaths.length === 0) {
+        new Notice("No effects selected.");
+        return;
+    }
+
+    const effectsToApply: string[] = [];
+    const effectsBlocked: string[] = [];
+    const immunities = this.plugin.settings.defenses.immunities;
+
+    for (const effectPath of selectedEffectPaths) {
+        let isBlocked = false;
+        
+        // Se a verificação de defesas estiver ATIVADA
+        if (checkDefenses) {
+    const file = this.app.vault.getAbstractFileByPath(effectPath);
+    if (file && file instanceof TFile) {
+        const metadata = this.app.metadataCache.getFileCache(file);
+        const effectType = metadata?.frontmatter?.damageType;
+
+        // Se o efeito tem um tipo e o personagem tem imunidade a esse tipo
+        if (effectType && immunities[effectType]?.length > 0) {
+            effectsBlocked.push(effectPath.split('/').pop() || effectPath);
+            isBlocked = true;
+        }
+    }
+  }
+        
+        // Se não foi bloqueado, adiciona à lista para aplicação
+        if (!isBlocked) {
+            effectsToApply.push(effectPath);
+        }
+    }
+
+    // Aplica os efeitos que passaram pela verificação
+    if (effectsToApply.length > 0) {
+        for (const path of effectsToApply) {
+            const effectId = `eff_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+            this.plugin.settings.effects[effectId] = {
+                notePath: path,
+                startDate: new Date().toISOString(),
+                durationDays: 1,
+                permanent: false,
+                active: true
+            };
+        }
+        new Notice(`${effectsToApply.length} effect(s) applied.`);
+        await this.plugin.applyAllPassiveEffects();
+    }
+
+    // Informa sobre os efeitos bloqueados
+    if (effectsBlocked.length > 0) {
+        new Notice(`Blocked by immunity: ${effectsBlocked.join(", ")}`);
+    }
+
+    await this.plugin.saveSettings();
+    this.onOpen(); 
+})
+    );
+
+    new Setting(section)
+    .setName("Check Defenses for Effects")
+    .setDesc("If enabled, effects can be blocked by character immunities (based on the effect's 'damageType').")
+    .addToggle(toggle => {
+        toggle
+            .setValue(checkDefenses) // O padrão é ON
+            .onChange(value => {
+                checkDefenses = value;
+            });
+    });
+
 
     // Manual Damage Input
     section.createEl("h4", { text: "Manual Damage Entry" });
@@ -2950,7 +3037,7 @@ class DamageModal extends Modal {
                 return;
             }
             // Usa this.selectedDamageType que é atualizado pelo dropdown
-             await this.applyDamage(defenseType, attackRollValue || saveDCValue, manualDamageAmount, this.selectedDamageType, "Manually applied", selectedEffectPath);
+             await this.applyDamage(defenseType, attackRollValue || saveDCValue, manualDamageAmount, this.selectedDamageType, "Manually applied", selectedEffectPaths);
           })
       );
     
@@ -2975,7 +3062,7 @@ class DamageModal extends Modal {
                 const rolledDamage = this.parseAndRollDice(diceString);
                 if (rolledDamage === null) return;
                 // Usa this.selectedDamageType que é atualizado pelo dropdown
-                 await this.applyDamage(defenseType, attackRollValue || saveDCValue, rolledDamage, this.selectedDamageType, this.selectedDamageType, `Rolled ${diceString}`);
+                 await this.applyDamage(defenseType, attackRollValue || saveDCValue, rolledDamage, this.selectedDamageType, `Rolled ${diceString}`, selectedEffectPaths);
             })
         );
   }

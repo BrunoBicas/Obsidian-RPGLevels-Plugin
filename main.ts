@@ -65,6 +65,8 @@ interface HealthData {
   hpPerLevel: number[];
   maxHP: number;
   currentHP: number;
+  featHPBonus?: number;
+  effectHPBonus?: number;
   tempHP: number; // This will store temp HP from items/effects
   manualTempHP?: number; // Temp HP from manual grants
   tempHPDamage?: number;
@@ -865,6 +867,7 @@ async applyAllPassiveEffects() {
     const statsBase: CharacterStats = { Strength: 10, Dexterity: 10, Constitution: 10, Intelligence: 10, Wisdom: 10, Charisma: 10 };
     const accumulatedStatBonuses: Partial<CharacterStats> = { Strength: 0, Dexterity: 0, Constitution: 0, Intelligence: 0, Wisdom: 0, Charisma: 0 };
     let accumulatedFeatHpBonus = 0;
+    let accumulatedEffectHpBonus = 0;
     let accumulatedFeatPointBonus = 0;
     let manualFeatPoints: number;
     
@@ -960,7 +963,14 @@ async applyAllPassiveEffects() {
         const effectData = await this.loadEffectDataWithLevels(sourcePath, this.settings.level);
 
         // A partir daqui, a lógica corrigida com os tipos definidos
-        if (effectData.hpBonus) accumulatedFeatHpBonus += effectData.hpBonus;
+        if (effectData.hpBonus) {
+  if (this.settings.obtainedFeats.includes(sourcePath) || this.settings.obtainedClassFeats.includes(sourcePath)) {
+    accumulatedFeatHpBonus += effectData.hpBonus;
+  } else {
+    accumulatedEffectHpBonus += effectData.hpBonus;
+    }
+   }
+
         if (effectData.featPointBonus) accumulatedFeatPointBonus += effectData.featPointBonus; // <-- ADICIONE ESTA LINHA
         
 
@@ -1152,18 +1162,27 @@ async applyAllPassiveEffects() {
     const conModifierForHp = this.getAbilityModifier(this.settings.characterStats.Constitution);
     const totalConBonusToHp = conModifierForHp * this.settings.level;
     
-    const newMaxHP = baseHpFromLevels + accumulatedFeatHpBonus + totalConBonusToHp;
+    const newMaxHP = baseHpFromLevels + accumulatedFeatHpBonus + accumulatedEffectHpBonus + totalConBonusToHp;
 
-    this.settings.health.maxHP = newMaxHP;
+
+    this.settings.health.maxHP = baseHpFromLevels + accumulatedFeatHpBonus + accumulatedEffectHpBonus + totalConBonusToHp;
+
+   this.settings.health.featHPBonus = accumulatedFeatHpBonus;
+   this.settings.health.effectHPBonus = accumulatedEffectHpBonus;
+
+
     
 
     const currentHP = this.settings.health.currentHP;
-    const lastMaxHP = this.settings.health.lastMaxHP ?? 0;
-    if (newMaxHP > lastMaxHP) {
-        this.settings.health.currentHP = Math.min(currentHP + (newMaxHP - lastMaxHP), newMaxHP);
-    } else if (newMaxHP < currentHP) {
-        this.settings.health.currentHP = newMaxHP;
-    }
+    const lastMaxHP = this.settings.health.lastMaxHP;
+    if (typeof lastMaxHP === "number") {
+	 if (newMaxHP > lastMaxHP) {
+		this.settings.health.currentHP = Math.min(currentHP + (newMaxHP - lastMaxHP), newMaxHP);
+	 } else if (newMaxHP < currentHP) {
+		this.settings.health.currentHP = newMaxHP;
+	  }
+   }
+
     this.settings.health.lastMaxHP = newMaxHP;
 
     // 7. CALCULAR BÔNUS DE PROFICIÊNCIA GERAL
@@ -2579,12 +2598,15 @@ class HPManagementModal extends Modal {
 
  const conMod = Math.floor((this.plugin.settings.characterStats.Constitution - 10) / 2);
  const constitutionHPBonus = conMod * this.plugin.settings.level;
+ const f1eatHPBonus = this.plugin.settings.health.featHPBonus || 0;
+ 
+
 
     // Mostrar bônus separados
     contentEl.createEl("h3", { text: "✨ Bônus de HP" });
 
     contentEl.createEl("p", {
-      text: `🧠 De Feats: ${featHPBonus}`
+      text: `🧠 De Feats: ${f1eatHPBonus}`
     });
 	
 	contentEl.createEl("p", {
@@ -2597,7 +2619,7 @@ class HPManagementModal extends Modal {
     });
 
     contentEl.createEl("h3", {
-      text: `🔢 Total de HP Máximo: ${totalHPFromLevels + featHPBonus + effectHPBonus + constitutionHPBonus} = ${totalHPFromLevels} (níveis) + ${featHPBonus} (feats) + ${effectHPBonus} (efeitos) + ${constitutionHPBonus} (Constituição)`
+      text: `🔢 Total de HP Máximo: ${totalHPFromLevels + f1eatHPBonus + effectHPBonus + constitutionHPBonus} = ${totalHPFromLevels} (níveis) + ${f1eatHPBonus} (feats) + ${effectHPBonus} (efeitos) + ${constitutionHPBonus} (Constituição)`
     });
 
 	    contentEl.createEl("hr"); // Optional separator
@@ -3002,7 +3024,7 @@ class DamageModal extends Modal {
 
     await this.plugin.saveSettings();
     this.onOpen(); 
-})
+  })
     );
 
     new Setting(section)
@@ -3604,7 +3626,7 @@ class VisionModal extends Modal {
 grantsDarkvision: 60 # Adds 60ft to Darkvision range
 
 grantsBlindsightRange: 30
-grantsBlindsightDetails: "Cannot perceive color."
+grantsBlindsightDetails: "vision."
 
 grantsSense_Keen_Smell_Range: 60 
 grantsSense_Keen_Smell_Details: "Advantage on Wisdom (Perception) checks for smell."

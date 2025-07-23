@@ -1165,24 +1165,28 @@ async applyAllPassiveEffects() {
     const newMaxHP = baseHpFromLevels + accumulatedFeatHpBonus + accumulatedEffectHpBonus + totalConBonusToHp;
 
 
-    this.settings.health.maxHP = baseHpFromLevels + accumulatedFeatHpBonus + accumulatedEffectHpBonus + totalConBonusToHp;
+    this.settings.health.maxHP = newMaxHP;
+    this.settings.health.featHPBonus = accumulatedFeatHpBonus;
+    this.settings.health.effectHPBonus = accumulatedEffectHpBonus;
 
-   this.settings.health.featHPBonus = accumulatedFeatHpBonus;
-   this.settings.health.effectHPBonus = accumulatedEffectHpBonus;
-
-
-    
-
-    const currentHP = this.settings.health.currentHP;
-    const lastMaxHP = this.settings.health.lastMaxHP;
-    if (typeof lastMaxHP === "number") {
-	 if (newMaxHP > lastMaxHP) {
-		this.settings.health.currentHP = Math.min(currentHP + (newMaxHP - lastMaxHP), newMaxHP);
-	 } else if (newMaxHP < currentHP) {
-		this.settings.health.currentHP = newMaxHP;
-	  }
-   }
-
+    // Preserve current HP on reload by only adjusting when not initializing
+    if (!this.isInitializing) {
+        const currentHP = this.settings.health.currentHP;
+        const lastMaxHP = this.settings.health.lastMaxHP;
+        if (typeof lastMaxHP === "number") {
+            if (newMaxHP > lastMaxHP) {
+                // Heal the difference
+                this.settings.health.currentHP = Math.min(
+                    currentHP + (newMaxHP - lastMaxHP),
+                    newMaxHP
+                );
+            } else if (newMaxHP < currentHP) {
+                // If max decreases, cap current HP
+                this.settings.health.currentHP = newMaxHP;
+            }
+        }
+    }
+    // Always update lastMaxHP for next comparison
     this.settings.health.lastMaxHP = newMaxHP;
 
     // 7. CALCULAR BÔNUS DE PROFICIÊNCIA GERAL

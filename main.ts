@@ -4037,10 +4037,12 @@ class FeatsModal extends Modal {
                 getItems(): string[] { return this.plugin.settings.obtainedFeats; } // [cite: 308]
                 getItemText(item: string): string { return item; } // [cite: 309]
                 async onChooseItem(item: string) { // [cite: 310]
-                  this.plugin.settings.obtainedFeats = this.plugin.settings.obtainedFeats.filter(f => f !== item); // [cite: 310]
+                  this.plugin.settings.obtainedFeats = this.plugin.settings.obtainedFeats.filter(f => f !== item);
+                  this.plugin.settings.spentFeatPoints.feats =
+                   this.plugin.settings.spentFeatPoints.feats.filter(f => f !== item);
                   await this.plugin.applyAllPassiveEffects(); // [cite: 311]
                   await this.plugin.saveSettings(); // [cite: 311]
-                  new Notice(`Feat removido: ${item}`); // [cite: 311]
+                  new Notice(`Feat removido: ${item}. Feat Point reembolsado.`); // [cite: 311]
                   this.parentModal.close(); // [cite: 311]
                   new FeatsModal(this.app, this.plugin).open(); // [cite: 311]
                 }
@@ -4111,17 +4113,17 @@ class FeatsModal extends Modal {
                 }
                 
                 const pickBtn = row.createEl("button", { text: "Pick Feat" }); // [cite: 316]
-                pickBtn.onclick = async () => { // [cite: 316]
-                    if ((this.plugin.settings.featPoints ?? 0) <= 0) { // [cite: 316]
-                        new Notice("Você não tem pontos de feat suficientes."); // [cite: 316]
-                        return; // [cite: 317]
-                    }
-                    this.plugin.settings.obtainedFeats.push(feat); // [cite: 317]
-                    this.plugin.settings.featPoints!--; // [cite: 317]
-                    await this.plugin.applyAllPassiveEffects(); // Garante que bônus do talento sejam aplicados [cite: 320]
-                    await this.plugin.saveSettings(); // [cite: 317]
-                    this.onOpen(); // Recarrega o modal para atualizar as listas e contagem de pontos
-                };
+                pickBtn.onclick = async () => {
+                if ((this.plugin.settings.featPoints ?? 0) <= 0) {
+                new Notice("Você não tem pontos de feat suficientes.");
+                return;
+                }
+               this.plugin.settings.obtainedFeats.push(feat);
+               this.plugin.settings.spentFeatPoints.feats.push(feat);   // ← registra o gasto
+               await this.plugin.applyAllPassiveEffects();              // recalcula featPoints
+               await this.plugin.saveSettings();
+               this.onOpen();  // atualiza a lista
+              };
             });
         }
     }

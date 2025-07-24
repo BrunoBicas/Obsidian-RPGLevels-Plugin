@@ -441,6 +441,48 @@ export default class RPGLevelsPlugin extends Plugin {
     await this.saveSettings();
   }
 
+  
+  public async applyEffects(effectPaths: string[], checkDefenses: boolean) {
+  const effectsToApply: string[] = [];
+  const effectsBlocked: string[] = [];
+  const immunities = this.settings.defenses.immunities;
+  for (const effectPath of effectPaths) {
+    let isBlocked = false;
+    
+    if (checkDefenses) {
+      const file = this.app.vault.getAbstractFileByPath(effectPath);
+      if (file && file instanceof TFile) {
+        const metadata = this.app.metadataCache.getFileCache(file);
+        const effectType = metadata?.frontmatter?.damageType;
+        if (effectType && immunities[effectType]?.length > 0) {
+          effectsBlocked.push(file.basename);
+          isBlocked = true;
+        }
+      }
+    }
+    
+    if (!isBlocked) {
+      effectsToApply.push(effectPath);
+    }
+  }
+  if (effectsToApply.length > 0) {
+    for (const path of effectsToApply) {
+      const effectId = `eff_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      this.settings.effects[effectId] = {
+        notePath: path,
+        startDate: new Date().toISOString(),
+        durationDays: 1,
+        permanent: false,
+        active: true
+      };
+    }
+    new Notice(`${effectsToApply.length} effect(s) applied.`);
+  }
+  if (effectsBlocked.length > 0) {
+    new Notice(`Blocked by immunity: ${effectsBlocked.join(", ")}`);
+   }
+  }
+
   public async loadSkillDefinitions(): Promise<LoadedSkillDefinition[]> {
     const loadedSkills: LoadedSkillDefinition[] = [];
     if (!this.settings.skillFolders || this.settings.skillFolders.length === 0) {
@@ -2002,6 +2044,19 @@ class EffectsModal extends Modal {
           permanent = value; // [cite: 190]
         });
       });
+    
+   let checkDefensesForEffect = true; // Variável para controlar o toggle
+
+   new Setting(configDiv)
+    .setName("Check Defenses")
+    .setDesc("If enabled, the effect can be blocked by immunities.")
+    .addToggle(toggle => {
+        toggle
+            .setValue(checkDefensesForEffect)
+            .onChange(value => {
+                checkDefensesForEffect = value;
+            });
+    });
     new Setting(configDiv) // [cite: 191]
       .addButton(button => {
         button.setButtonText("Confirmar") // [cite: 191]
@@ -2938,34 +2993,64 @@ class DamageModal extends Modal {
 
 
     //effects selector
-    const effectsContainer = section.createEl("details"); // Cria um container recolhível
-    effectsContainer.createEl("summary", { text: "Apply Effects (Optional)" });
+   const effectsContainer = section.createEl("details");
+   effectsContainer.createEl("summary", { text: "Apply Effects (Optional)" });
 
-    const availableUniqueEffects = this.plugin.getAvailableEffectsFromFolders();
-    const availableRepeatableEffects = this.plugin.getAvailableRepeatableEffects();
-    const allAvailableEffects = [...new Set([...availableUniqueEffects, ...availableRepeatableEffects])];
+   // --- Barra de Busca ---
+   const searchInput = effectsContainer.createEl("input", { type: "text", placeholder: "Search effects..." });
+   searchInput.style.width = "100%";
+   searchInput.style.padding = "5px";
+   searchInput.style.marginBottom = "10px";
+   searchInput.style.boxSizing = "border-box";
 
-    if (allAvailableEffects.length > 0) {
-     allAvailableEffects.forEach(effectPath => {
-        new Setting(effectsContainer)
-            .setName(effectPath.split('/').pop()?.replace('.md', '') || effectPath)
-            .addToggle(toggle => {
-                toggle.onChange(value => {
-                    if (value) {
-                        // Adiciona o efeito à lista se marcado
-                        if (!selectedEffectPaths.includes(effectPath)) {
-                            selectedEffectPaths.push(effectPath);
-                        }
-                    } else {
-                        // Remove o efeito da lista se desmarcado
-                        selectedEffectPaths = selectedEffectPaths.filter(p => p !== effectPath);
-                    }
+   // --- Container para a Lista Dinâmica ---
+   const effectListContainer = effectsContainer.createDiv();
+
+   const availableUniqueEffects = this.plugin.getAvailableEffectsFromFolders();
+   const availableRepeatableEffects = this.plugin.getAvailableRepeatableEffects();
+   const allAvailableEffects = [...new Set([...availableUniqueEffects, ...availableRepeatableEffects])];
+
+   // --- Função de Renderização ---
+   const renderEffectList = (searchTerm: string) => {
+    effectListContainer.empty();
+    const lowerCaseSearchTerm = searchTerm.toLowerCase();
+    const filteredEffects = allAvailableEffects.filter(path => path.toLowerCase().includes(lowerCaseSearchTerm));
+
+    if (filteredEffects.length > 0) {
+        filteredEffects.forEach(effectPath => {
+            new Setting(effectListContainer)
+                .setName(effectPath.split('/').pop()?.replace('.md', '') || effectPath)
+                .addToggle(toggle => {
+                    toggle.setValue(selectedEffectPaths.includes(effectPath))
+                        .onChange(value => {
+                            if (value) {
+                                if (!selectedEffectPaths.includes(effectPath)) selectedEffectPaths.push(effectPath);
+                            } else {
+                                selectedEffectPaths = selectedEffectPaths.filter(p => p !== effectPath);
+                            }
+                        });
                 });
-            });
-     });
+        });
     } else {
-     effectsContainer.createEl("p", { text: "No effect notes found in configured folders.", cls: "setting-item-description" });
+        effectListContainer.createEl("p", { text: "No effects match your search.", cls: "setting-item-description" });
     }
+   };
+
+   // --- Conexão e Chamada Inicial ---
+   searchInput.addEventListener('input', () => renderEffectList(searchInput.value));
+   renderEffectList("");
+
+   new Setting(section)
+    .setName("Check Defenses for Effects")
+    .setDesc("If enabled, effects can be blocked by character immunities (based on the effect's 'damageType').")
+    .addToggle(toggle => {
+        toggle
+            .setValue(checkDefenses) // O padrão é ON
+            .onChange(value => {
+                checkDefenses = value;
+            });
+    });
+   
 
     new Setting(section)
     .addButton(button => button
@@ -3030,17 +3115,6 @@ class DamageModal extends Modal {
     this.onOpen(); 
   })
     );
-
-    new Setting(section)
-    .setName("Check Defenses for Effects")
-    .setDesc("If enabled, effects can be blocked by character immunities (based on the effect's 'damageType').")
-    .addToggle(toggle => {
-        toggle
-            .setValue(checkDefenses) // O padrão é ON
-            .onChange(value => {
-                checkDefenses = value;
-            });
-    });
 
 
     // Manual Damage Input

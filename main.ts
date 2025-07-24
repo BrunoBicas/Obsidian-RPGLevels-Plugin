@@ -441,48 +441,6 @@ export default class RPGLevelsPlugin extends Plugin {
     await this.saveSettings();
   }
 
-  
-  public async applyEffects(effectPaths: string[], checkDefenses: boolean) {
-  const effectsToApply: string[] = [];
-  const effectsBlocked: string[] = [];
-  const immunities = this.settings.defenses.immunities;
-  for (const effectPath of effectPaths) {
-    let isBlocked = false;
-    
-    if (checkDefenses) {
-      const file = this.app.vault.getAbstractFileByPath(effectPath);
-      if (file && file instanceof TFile) {
-        const metadata = this.app.metadataCache.getFileCache(file);
-        const effectType = metadata?.frontmatter?.damageType;
-        if (effectType && immunities[effectType]?.length > 0) {
-          effectsBlocked.push(file.basename);
-          isBlocked = true;
-        }
-      }
-    }
-    
-    if (!isBlocked) {
-      effectsToApply.push(effectPath);
-    }
-  }
-  if (effectsToApply.length > 0) {
-    for (const path of effectsToApply) {
-      const effectId = `eff_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-      this.settings.effects[effectId] = {
-        notePath: path,
-        startDate: new Date().toISOString(),
-        durationDays: 1,
-        permanent: false,
-        active: true
-      };
-    }
-    new Notice(`${effectsToApply.length} effect(s) applied.`);
-  }
-  if (effectsBlocked.length > 0) {
-    new Notice(`Blocked by immunity: ${effectsBlocked.join(", ")}`);
-   }
-  }
-
   public async loadSkillDefinitions(): Promise<LoadedSkillDefinition[]> {
     const loadedSkills: LoadedSkillDefinition[] = [];
     if (!this.settings.skillFolders || this.settings.skillFolders.length === 0) {
@@ -2044,19 +2002,6 @@ class EffectsModal extends Modal {
           permanent = value; // [cite: 190]
         });
       });
-    
-   let checkDefensesForEffect = true; // Variável para controlar o toggle
-
-   new Setting(configDiv)
-    .setName("Check Defenses")
-    .setDesc("If enabled, the effect can be blocked by immunities.")
-    .addToggle(toggle => {
-        toggle
-            .setValue(checkDefensesForEffect)
-            .onChange(value => {
-                checkDefensesForEffect = value;
-            });
-    });
     new Setting(configDiv) // [cite: 191]
       .addButton(button => {
         button.setButtonText("Confirmar") // [cite: 191]

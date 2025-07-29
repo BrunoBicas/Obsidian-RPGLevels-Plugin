@@ -917,12 +917,16 @@ async applyAllPassiveEffects() {
     });
 
     // 3. COLETAR TODAS AS FONTES DE BÔNUS
-    const allBonusSourcesPaths: string[] = [
-        ...this.settings.obtainedFeats,
-        ...Object.values(this.settings.effects)
-            .filter(effect => effect.active && !this.isEffectExpired(effect))
-            .map(effect => effect.notePath)
-    ];
+    const allBonusSourcesPaths = [
+    ...this.settings.obtainedFeats,
+    ...this.settings.obtainedClassFeats,
+    ...Object.values(this.settings.effects)
+        .filter(effect => effect.active && !this.isEffectExpired(effect))
+        .map(effect => effect.notePath),
+    this.settings.class,
+    this.settings.subclass
+   ].filter((path): path is string => typeof path === 'string');
+
 
     // PASSO 4: PROCESSAR OS BÔNUS DE CADA FONTE
     const seen = new Set<string>();

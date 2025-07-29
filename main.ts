@@ -851,12 +851,15 @@ async loadEffectDataWithLevels(path: string, characterLevel: number): Promise<an
         } 
         // Adiciona bônus que não são de nível (os bônus base)
         else if (!key.match(/^lvl\d+$/)) {
-             if (typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean') {
-                combinedBonuses[key] = value;
-            } else if (Array.isArray(value)) {
-                combinedBonuses[key] = [...(combinedBonuses[key] || []), ...value];
-            }
-        }
+  if (typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean') {
+    combinedBonuses[key] = value;
+  } else if (Array.isArray(value)) {
+    combinedBonuses[key] = [...(combinedBonuses[key] || []), ...value];
+  } else if (typeof value === 'object' && value !== null) {
+    combinedBonuses[key] = value; // <-- AQUI ENTRA o objeto `action`
+  }
+ }
+
     }
 
     return combinedBonuses;
@@ -922,7 +925,11 @@ async applyAllPassiveEffects() {
     ];
 
     // PASSO 4: PROCESSAR OS BÔNUS DE CADA FONTE
-    for (const sourcePath of classSources) {
+    const seen = new Set<string>();
+      for (const sourcePath of allBonusSourcesPaths) {
+      if (seen.has(sourcePath)) continue;
+      seen.add(sourcePath);
+
         const file = this.app.vault.getAbstractFileByPath(sourcePath);
         if (file instanceof TFile) {
             const metadata = this.app.metadataCache.getFileCache(file)?.frontmatter;
@@ -1017,6 +1024,23 @@ async applyAllPassiveEffects() {
 	    	this.settings.armorClass.sources.push(sourcePath);
 	      }
        }
+
+      // DENTRO DE applyAllPassiveEffects
+       if (effectData.usesEffect && effectData.action) {
+      const unexecutedInstances = Object.entries(this.settings.effects)
+        .filter(([id, eff]) =>
+          eff.notePath === sourcePath &&
+          eff.active &&
+          !eff.executed &&
+          !this.isEffectExpired(eff)
+        );
+
+      for (const [effectId] of unexecutedInstances) {
+        await this.executeSingleUseEffect(effectData.action);
+        this.settings.effects[effectId].executed = true;
+      }
+    }
+    
 
         
         // Perícias (Skills)
@@ -1197,6 +1221,46 @@ async applyAllPassiveEffects() {
     await this.saveSettings();
 }
 
+// NOVO CÓDIGO para executeSingleUseEffect
+public async executeSingleUseEffect(action: any): Promise<void> {
+  const health = this.settings.health;
+  switch (action.type) {
+    case "heal": {
+      const healed = Math.min(action.amount||0, health.maxHP - health.currentHP);
+      if (healed > 0) {
+        health.currentHP += healed;
+        new Notice(`Curou ${healed} de HP.`);
+      }
+      break;
+    }
+    case "tempHeal": {
+      await this.healTempHP(action.amount||0);
+      break;
+    }
+    case "damage": {
+      const ac = this.getCurrentAC();
+      let hit = true;
+      if (action.requiresAC && action.attackRoll !== undefined) {
+        hit = action.attackRoll >= ac;
+      }
+      if (!hit) {
+        new Notice(`Ataque falhou (CA ${ac}).`);
+        return;
+      }
+      const damage = action.amount||0;
+      const effectiveTempHP = this.getEffectiveTempHP();
+      const toTemp = Math.min(damage, effectiveTempHP);
+      if (toTemp > 0) health.tempHPDamage = (health.tempHPDamage||0) + toTemp;
+      const remaining = damage - toTemp;
+      if (remaining > 0) health.currentHP = Math.max(0, health.currentHP - remaining);
+      new Notice(`Recebeu ${damage} de dano.`);
+      break;
+    }
+    default:
+      new Notice("Ação desconhecida no efeito.");
+  }
+  await this.saveSettings();
+}
 
 	
 
@@ -2013,7 +2077,8 @@ class EffectsModal extends Modal {
               startDate: new Date().toISOString(), // [cite: 192]
               durationDays: permanent ? undefined : (duration > 0 ? duration : undefined), // [cite: 192]
               permanent, // [cite: 192]
-              active: true // [cite: 192]
+              active: true, // [cite: 192]
+              executed: false, 
             };
 			await this.app.metadataCache.trigger("changed", this.app.vault.getAbstractFileByPath(path)!); // [cite: 192]
 			await this.plugin.applyAllPassiveEffects(); // [cite: 192]
@@ -2824,7 +2889,8 @@ class DamageModal extends Modal {
             startDate: new Date().toISOString(),
             durationDays: 1,
             permanent: false,
-            active: true
+            active: true,
+            executed: false 
         };
     }
     new Notice(`${effectPaths.length} effect(s) applied along with damage.`);
@@ -3044,7 +3110,8 @@ class DamageModal extends Modal {
                 startDate: new Date().toISOString(),
                 durationDays: 1,
                 permanent: false,
-                active: true
+                active: true,
+                executed: false  
             };
         }
         new Notice(`${effectsToApply.length} effect(s) applied.`);
@@ -3349,7 +3416,8 @@ class DamageModal extends Modal {
               startDate: new Date().toISOString(), 
               durationDays: permanent ? undefined : (duration > 0 ? duration : undefined), 
               permanent, 
-              active: true 
+              active: true, 
+              executed: false 
             };
             
             const effectFile = this.app.vault.getAbstractFileByPath(path);

@@ -141,6 +141,8 @@ interface RPGLevelsSettings {
   classFolders: string[];
   subclassFolders: string[];
   manualFeatPoints: number
+  classEffectFolders: string[];
+  unlockedEffects: string[];  
   
  
 
@@ -264,6 +266,8 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
     subclassFolders: [],
     obtainedClassFeats: [], // NEW
 	  classFeatFolders: [],   // NEW
+    classEffectFolders: [],
+    unlockedEffects: [],  
 
 
 	effectFolders: [],
@@ -887,6 +891,7 @@ async applyAllPassiveEffects() {
     this.settings.speed.additionalSpeeds = {};
     this.settings.vision = { senses: {} }; 
     this.settings.obtainedClassFeats = []; // IMPORTANT: Reset granted feats before recalculating
+    this.settings.unlockedEffects = [];
 
     const sourceNotesForBonuses: string[] = [
     ...this.settings.obtainedFeats,
@@ -1044,9 +1049,53 @@ async applyAllPassiveEffects() {
         this.settings.effects[effectId].executed = true;
       }
     }
-    
+     // Efeitos disponíveis nas pastas de Class Effects
+   const grantableClassEffects = this.getAllClassEffectPaths();
+   const allUnlockedEffects = this.settings.unlockedEffects;
 
-        
+   // Procura efeitos a serem concedidos por feats/classes/subclasses
+   for (const sourcePath of allBonusSourcesPaths) {
+        const file = this.app.vault.getAbstractFileByPath(sourcePath);
+        if (!(file instanceof TFile)) continue;
+
+        const metadata = this.app.metadataCache.getFileCache(file)?.frontmatter;
+        if (!metadata) continue;
+
+        // Função interna para processar o `grantsEffect` de qualquer objeto
+        const processGrantedEffects = (data: any) => {
+            if (!data || !data.grantsEffect) return;
+
+            const granted = Array.isArray(data.grantsEffect)
+                ? data.grantsEffect
+                : [data.grantsEffect];
+
+            for (const grantedPath of granted) {
+                // Só desbloqueia se o efeito estiver listado nas pastas de Class Effects
+                if (grantableClassEffects.includes(grantedPath)) {
+                    // Adiciona à lista de desbloqueados se ainda não estiver lá
+                    if (!allUnlockedEffects.includes(grantedPath)) {
+                        allUnlockedEffects.push(grantedPath);
+                    }
+                }
+            }
+        };
+
+        // Itera por TODAS as chaves no frontmatter para encontrar `grantsEffect`
+        for (const [key, value] of Object.entries(metadata)) {
+            const levelMatch = key.match(/^lvl(\d+)$/);
+            if (levelMatch) {
+                const featureLevel = parseInt(levelMatch[1], 10);
+                // Se o nível for suficiente e o valor for um objeto (onde o grantsEffect estaria)
+                if (this.settings.level >= featureLevel && typeof value === 'object' && value !== null) {
+                    processGrantedEffects(value); // Processa grantsEffect dentro de um bloco de nível
+                }
+            } else if (key === 'grantsEffect') {
+                // Processa grantsEffect que está na raiz do frontmatter
+                processGrantedEffects(metadata);
+            }
+        }
+    }
+
         // Perícias (Skills)
         const processSkillLevel = (skillName: string, level: "proficient" | "expert") => {
             if (!this.settings.skillProficiencies[skillName]) {
@@ -1266,6 +1315,22 @@ public async executeSingleUseEffect(action: any): Promise<void> {
   await this.saveSettings();
 }
 
+public getAllClassEffectPaths(): string[] {
+  const effects: string[] = [];
+
+  for (const folderPath of this.settings.classEffectFolders) {
+    const folder = this.app.vault.getAbstractFileByPath(folderPath);
+    if (folder instanceof TFolder) {
+      for (const file of folder.children) {
+        if (file instanceof TFile && file.extension === "md") {
+          effects.push(file.path);
+        }
+      }
+    }
+  }
+
+  return effects;
+}
 	
 
 	// New method to initialize with currently open file
@@ -1851,7 +1916,6 @@ class FolderSuggestModal extends FuzzySuggestModal<TFolder> {
 	}
 }
 
-// [[NO SEU ARQUIVO 10.txt, SUBSTITUA A CLASSE EffectsModal EXISTENTE POR ESTA]]
 
 class EffectsModal extends Modal {
   plugin: RPGLevelsPlugin;
@@ -1941,6 +2005,23 @@ class EffectsModal extends Modal {
         repeatable: [] as TFile[],
         classEffects: [] as TFile[] // NOVA lista para efeitos de classe
     };
+     contentEl.createEl("h3", { text: "Habilidades Desbloqueadas para Ativar" });
+
+   
+    const unlockedButNotActive = this.plugin.settings.unlockedEffects.filter(
+        path => !currentActiveEffectPaths.includes(path)
+    );
+
+    if (unlockedButNotActive.length === 0) {
+        contentEl.createEl("p", { text: "Nenhuma nova habilidade desbloqueada ou todas já estão ativas." });
+    } else {
+        unlockedButNotActive.forEach(effectPath => {
+            // Reutilizamos a função que já cria a entrada para um efeito
+            this.renderEffectEntry(contentEl, effectPath, false); // O 'false' indica que não é repetível por padrão
+        });
+    }
+
+    contentEl.createEl("hr");
 
     // 1. Efeitos das pastas de settings
     this.plugin.settings.effectFolders.forEach(folderPath => {
@@ -3023,7 +3104,8 @@ class DamageModal extends Modal {
 
    const availableUniqueEffects = this.plugin.getAvailableEffectsFromFolders();
    const availableRepeatableEffects = this.plugin.getAvailableRepeatableEffects();
-   const allAvailableEffects = [...new Set([...availableUniqueEffects, ...availableRepeatableEffects])];
+   const unlockedClassEffects = this.plugin.settings.unlockedEffects || [];
+   const allAvailableEffects = [...new Set([...availableUniqueEffects, ...availableRepeatableEffects, ...unlockedClassEffects])];
 
    // --- Função de Renderização ---
    const renderEffectList = (searchTerm: string) => {
@@ -3286,7 +3368,7 @@ class DamageModal extends Modal {
     const activeEffectPaths = Object.values(this.plugin.settings.effects)
                                    .filter(e => e.active && !this.plugin.isEffectExpired(e))
                                    .map(e => e.notePath);
-
+    
     // === Unique Effects ===
     contentEl.createEl("h4", { text: "Available Unique Effects (by Folder)" });
     if (this.plugin.settings.effectFolders.length === 0) {
@@ -3323,7 +3405,31 @@ class DamageModal extends Modal {
             });
         }
     });
+
+    // === Unlocked Class Effects ===
+contentEl.createEl("h4", { text: "Unlocked Class Effects (by Folder)" });
+
+if (this.plugin.settings.classEffectFolders.length === 0) {
+    contentEl.createEl("p", {text: "No class effect folders configured in settings."});
+} else {
+    this.plugin.settings.classEffectFolders.forEach(folderPath => {
+        const folderDetails = contentEl.createEl("details");
+        folderDetails.createEl("summary", { text: folderPath });
+
+        // Filtra os efeitos desbloqueados que pertencem a esta pasta
+        const effectsInFolder = this.plugin.settings.unlockedEffects.filter(p => p.startsWith(folderPath));
+
+        if (effectsInFolder.length === 0) {
+            folderDetails.createEl("p", { text: "No unlocked class effects from this folder." });
+        } else {
+            effectsInFolder.forEach(effectPath => {
+                this.renderEffectEntry(folderDetails, effectPath, false); // unlocked não são repetíveis por padrão
+            });
+        }
+    });
   }
+  }
+  
   
   // Novo helper para pegar efeitos de uma pasta específica
   getEffectsFromSpecificFolder(folderPath: string, activeEffectPaths: string[], isRepeatable: boolean): TFile[] {
@@ -5235,6 +5341,22 @@ this.plugin.settings.classFeatFolders.forEach((folderPath, index) => {
                 })
         );
 });
+
+ new Setting(containerEl)
+  .setName("Class Effect Folders")
+  .setDesc("Pastas contendo efeitos que só são ativados quando concedidos via grantsEffect.")
+  .addTextArea(text => {
+    text
+      .setPlaceholder("Ex: Effects/Classes/atack")
+      .setValue(this.plugin.settings.classEffectFolders.join("\n"))
+      .onChange(async (v) => {
+        this.plugin.settings.classEffectFolders = v
+          .split("\n")
+          .map(s => s.trim())
+          .filter(Boolean);
+        await this.plugin.saveSettings();
+      });
+  });
 
 }
 }

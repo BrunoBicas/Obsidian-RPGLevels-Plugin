@@ -152,6 +152,7 @@ interface RPGLevelsSettings {
 			description: string;
 			xpReward: number;
 			respawnDays: number; // How many days before the quest reappears
+      featPointReward?: number; 
 			lastCompleted: string; // Date string when last completed
 			availableDate: string; // Optional specific date when the quest is available
 			completed: boolean;
@@ -1820,7 +1821,7 @@ public getAllClassEffectPaths(): string[] {
 								<p>${quest.description}</p>
 								<div style="display: flex; justify-content: space-between; align-items: center;">
 									<span style="font-weight: bold;">Reward: ${quest.xpReward} XP</span>
-									<button class="mod-cta complete-quest" data-quest-id="${id}">Complete Quest</button>
+                  <div>Recompensa: +${quest.xpReward} XP${quest.featPointReward ? `, +${quest.featPointReward} Feat Point${quest.featPointReward > 1 ? 's' : ''}` : ''}</div>
 								</div>
 							</div>
 						`).join('')}
@@ -1838,18 +1839,26 @@ public getAllClassEffectPaths(): string[] {
 		
 		// Add event listeners to Complete Quest buttons
 		modalDiv.querySelectorAll('.complete-quest').forEach(button => {
-			button.addEventListener('click', (e) => {
+			button.addEventListener('click', async (e) => {
 				const questId = (e.target as HTMLElement).dataset.questId;
 				if (questId && this.settings.quests[questId]) {
 					const quest = this.settings.quests[questId];
 					
 					// Award XP
 					this.settings.currentXP += quest.xpReward;
+          
+          if (quest.featPointReward && quest.featPointReward > 0) {
+         this.settings.extraFeatPointsGranted += quest.featPointReward;
+          new Notice(`Você ganhou ${quest.featPointReward} feat point${quest.featPointReward > 1 ? 's' : ''}`);
+         }
+          await this.saveSettings();
+          await this.applyAllPassiveEffects();
+					
 					
 					// Mark as completed
 					quest.completed = true;
 					quest.lastCompleted = new Date().toISOString().split('T')[0];
-					
+          
 					// Check for level up
 					this.awardXP("taskEasy", `Quest completed: ${quest.title} (+${quest.xpReward}XP)`);
 					
@@ -4084,7 +4093,10 @@ class QuestModal extends Modal {
 			questEl.createEl("p", { text: quest.description });      
       
       const rewardsContainer = questEl.createDiv({cls: 'rewards-container'});
-            rewardsContainer.createEl("p", { text: `XP: ${quest.xpReward}` });
+            rewardsContainer.createEl("p", {
+             text: `XP: ${quest.xpReward}` +
+             (quest.featPointReward ? `, Feat Points: ${quest.featPointReward}` : '')
+            });
 
 
             // === LÓGICA PARA EXIBIR RECOMPENSAS CUSTOMIZADAS DO YAML ===
@@ -4124,13 +4136,17 @@ class QuestModal extends Modal {
 				const xpAmount = quest.xpReward;
 				this.plugin.awardXP("questComplete", `Quest completed: ${quest.title} (+${xpAmount}XP)`, xpAmount);
 
-				quest.completed = true;
+        
+        
+        if (quest.featPointReward && quest.featPointReward > 0) {
+          this.plugin.settings.extraFeatPointsGranted += quest.featPointReward;
+          new Notice(`Ganhou ${quest.featPointReward} feat point${quest.featPointReward > 1 ? 's' : ''}`);
+          }
 
-				if (!quest.availableDate?.match(/^\d{2}-\d{2}$/) && !quest.availableDate?.includes(" to ") && quest.respawnDays > 0) {
-					const newDate = new Date();
-					newDate.setDate(newDate.getDate() + quest.respawnDays);
-					quest.availableDate = newDate.toISOString().split("T")[0];
-				}
+        quest.lastCompleted = new Date().toISOString().split("T")[0];
+				quest.completed = true;
+        
+
 
 				this.plugin.saveSettings();
 
@@ -4143,7 +4159,7 @@ class QuestModal extends Modal {
         };
         // Disparar o evento no workspace
         this.app.workspace.trigger('rpg-levels:quest-completed', eventData);
-        new Notice(`Sinal 'rpg-levels:quest-completed' emitido para: ${quest.title}`); // Opcional: para depuração
+        //new Notice(`Sinal 'rpg-levels:quest-completed' emitido para: ${quest.title}`); // Opcional: para depuração
 			
         this.close();
 			};
@@ -4933,6 +4949,18 @@ new Setting(containerEl)
 					.onChange(value => {
 						newQuest.xpReward = value;
 					}));
+
+      new Setting(questForm)
+       .setName('Feat Points Reward')
+       .setDesc('Quantos feat points ganha ao concluir esta quest')
+       .addSlider(slider => slider
+       .setLimits(0, 5, 1)
+       .setValue(0)
+       .setDynamicTooltip()
+       .onChange(value => {
+        (newQuest as any).featPointReward = value;
+      }));
+
 			
 			new Setting(questForm)
 				.setName('Respawn Days')

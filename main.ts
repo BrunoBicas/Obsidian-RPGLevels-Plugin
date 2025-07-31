@@ -158,6 +158,7 @@ interface RPGLevelsSettings {
 			completed: boolean;
 		}
 	};
+  manualQuests: string[];
 	questNoteLinks?: { [id: string]: string };
 	achievements: {
 		[key: string]: boolean;
@@ -290,6 +291,7 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
 		}
 	},
 	quests: {},
+  manualQuests: [],
 	questNoteLinks: {},
 	xpGainRates: {
 		createNote: 10,
@@ -575,6 +577,37 @@ export default class RPGLevelsPlugin extends Plugin {
    callback: () => {
     new ArmorClassModal(this.app, this).open();
    }
+   });
+
+   this.registerMarkdownCodeBlockProcessor("rpg-quest-button", async (source, el) => {
+   const props = Object.fromEntries(
+    source.split("\n").map(l => l.split(":").map(s => s.trim()))
+   );
+   const { questId, buttonText } = props;
+   const quest = this.settings.quests[questId];
+   if (!quest) {
+    el.createEl('p', { text: 'Quest não encontrada.' });
+    return;
+   }
+   const btn = el.createEl('button', { text: buttonText || 'Ativar Quest' });
+   btn.classList.add('mod-cta');
+   btn.onclick = async () => {
+    // Se já ativa e não concluída, impede
+    const today = new Date().toISOString().split('T')[0];
+    if (this.settings.manualQuests.includes(questId) &&
+        quest.availableDate === today &&
+        !quest.completed
+    ) {
+      new Notice("Essa quest já está ativa.");
+      return;
+    }
+    // Ativa
+    quest.availableDate = today;
+    quest.completed = false;
+    quest.lastCompleted = "";
+    await this.saveSettings();
+    new Notice(`Quest "${quest.title}" ativada!`);
+    };
    });
 
 		
@@ -4048,46 +4081,60 @@ class QuestModal extends Modal {
 	}
 
 	onOpen() {
-		const { contentEl } = this;
-		contentEl.createEl("h2", { text: "Available Quests" });
+    const { contentEl } = this;
+    contentEl.createEl("h2", { text: "Available Quests" });
 
-		const today = new Date();
-		const todayMMDD = `${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const today = new Date();
+    const todayMMDD = `${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    let questsDisplayed = 0; // Counter to check if any quests are shown
 
-		for (const [id, quest] of Object.entries(this.plugin.settings.quests)) {
-			const questEl = contentEl.createDiv({ cls: "quest-item" });
+      for (const [id, quest] of Object.entries(this.plugin.settings.quests)) { 
+        if (
+         this.plugin.settings.manualQuests.includes(id) &&
+         !quest.availableDate
+         ) {
+        continue;
+        }
 
-			let isAvailable = false;
+        let isAvailable = false;
 
-			const isRange = quest.availableDate?.includes(" to ");
-			if (isRange) {
-				const [startStr, endStr] = quest.availableDate.split(" to ");
-				const start = this.parseMMDD(startStr);
-				const end = this.parseMMDD(endStr);
-				const now = new Date(2000, today.getMonth(), today.getDate());
+        // Logic to determine if the quest is available
+        const isRange = quest.availableDate?.includes(" to ");
+        if (isRange) {
+            const [startStr, endStr] = quest.availableDate.split(" to ");
+            const start = this.parseMMDD(startStr);
+            const end = this.parseMMDD(endStr);
+            const now = new Date(2000, today.getMonth(), today.getDate());
+            const startDate = new Date(2000, start.month - 1, start.day);
+            const endDate = new Date(2000, end.month - 1, end.day);
+            isAvailable = now >= startDate && now <= endDate;
+        } else if (/^\d{2}-\d{2}$/.test(quest.availableDate)) {
+            isAvailable = quest.availableDate === todayMMDD;
+        } else {
+            isAvailable = true;
+            if (quest.lastCompleted && quest.respawnDays > 0) {
+                const last = new Date(quest.lastCompleted);
+                const respawn = new Date(last);
+                respawn.setDate(respawn.getDate() + quest.respawnDays);
+                isAvailable = today >= respawn;
+            }
+        }
 
-				const startDate = new Date(2000, start.month - 1, start.day);
-				const endDate = new Date(2000, end.month - 1, end.day);
+        // If not available, skip this quest entirely without creating any elements
+        if (!isAvailable) {
+            continue;
+        }
 
-				isAvailable = now >= startDate && now <= endDate;
-			}
-			else if (/^\d{2}-\d{2}$/.test(quest.availableDate)) {
-				isAvailable = quest.availableDate === todayMMDD;
-			}
-			else {
-				isAvailable = true;
-				if (quest.lastCompleted && quest.respawnDays > 0) {
-					const last = new Date(quest.lastCompleted);
-					const respawn = new Date(last);
-					respawn.setDate(respawn.getDate() + quest.respawnDays);
-					isAvailable = today >= respawn;
-				}
-			}
+        // --- If the quest IS available, create its elements ---
+        questsDisplayed++;
+        const questEl = contentEl.createDiv({ cls: "quest-item" });
 
-			if (!isAvailable) {
-				questEl.createEl("p", { text: `Quest unavailable until ${quest.availableDate}` });
-				continue;
-			}
+        
+    // If no quests were displayed after checking all of them, show a message
+    if (questsDisplayed === 0) {
+        contentEl.createEl("p", { text: "No quests available at this time." });
+    }
+
 
 			questEl.createEl("h3", { text: quest.title });
 			questEl.createEl("p", { text: quest.description });      
@@ -4833,6 +4880,21 @@ toggleBtn.addEventListener('click', () => {
 				title.style.margin = '0';
 				
 				const controlButtons = header.createDiv();
+
+        new Setting(questContainer)
+        .setName("Quest ID")
+        .setDesc("Use esse ID no botão `rpg-quest-button`")
+        .addText(text => {
+        text.setValue(id)
+        .setDisabled(true)
+        .inputEl.style.opacity = "0.7";
+
+        text.inputEl.onclick = () => {
+        navigator.clipboard.writeText(id);
+        new Notice("ID copiado!");
+       };
+       });
+
 				
 				const deleteButton = controlButtons.createEl('button');
 				deleteButton.setText('Delete');
@@ -4920,7 +4982,8 @@ new Setting(containerEl)
 				respawnDays: 1,
 				availableDate: '',
 				completed: false,
-				lastCompleted: ''
+				lastCompleted: '',
+        manual: false 
 			};
       let newQuestNotePath = '';
 			
@@ -5019,6 +5082,14 @@ new Setting(questForm)
 	});
 
   new Setting(questForm)
+  .setName('Manual?')
+  .setDesc('Só ativa via botão/codeblock')
+  .addToggle(t =>
+    t.setValue(false)
+     .onChange(v => newQuest.manual = v)
+  );
+
+  new Setting(questForm)
     .setName('Associated Note Path (Optional)')
     .setDesc("Path to the quest note (e.g., Quests/MyAdventure.md).")
     .addText(text => text
@@ -5039,6 +5110,11 @@ new Setting(questForm)
 						
 						// Generate a unique ID
 						const questId = 'quest_' + Date.now();
+
+            this.plugin.settings.quests[questId] = newQuest;
+              if (newQuest.manual) {
+               this.plugin.settings.manualQuests.push(questId);
+              }           
 						
 						// Add to settings
 						this.plugin.settings.quests[questId] = newQuest;
@@ -5059,7 +5135,8 @@ new Setting(questForm)
 							respawnDays: 1,
 							availableDate: '',
 							completed: false,
-							lastCompleted: ''
+							lastCompleted: '',
+              manual: false 
 						};
             newQuestNotePath = '';
 						

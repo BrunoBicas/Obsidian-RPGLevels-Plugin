@@ -581,27 +581,50 @@ export default class RPGLevelsPlugin extends Plugin {
 
    this.registerMarkdownCodeBlockProcessor("rpg-quest-button", async (source, el) => {
    const props = Object.fromEntries(
-    source.split("\n").map(l => l.split(":").map(s => s.trim()))
+    source.split("\n").map(l => {
+      const [k, ...rest] = l.split(":");
+      return [k.trim(), rest.join(":").trim()];
+    })
    );
-   const { questId, buttonText } = props;
-   const quest = this.settings.quests[questId];
-   if (!quest) {
-    el.createEl('p', { text: 'Quest não encontrada.' });
+
+   let { questId, buttonText } = props;
+
+   if (!questId) {
+    el.createEl("p", { text: "⚠️ Nenhum questId fornecido." });
     return;
    }
-   const btn = el.createEl('button', { text: buttonText || 'Ativar Quest' });
-   btn.classList.add('mod-cta');
+
+   // 🔍 RESOLVE: se questId for um path de nota, converte para o id real
+   if (!this.settings.quests[questId]) {
+    // Tenta encontrar o id correspondente em questNoteLinks
+    const foundId = Object.entries(this.settings.questNoteLinks || {})
+      .find(([id, path]) => path === questId)?.[0];
+    if (foundId) {
+      questId = foundId;
+    }
+   }
+
+   const quest = this.settings.quests[questId];
+
+   if (!quest) {
+    el.createEl("p", { text: `⚠️ Quest "${props.questId}" não encontrada.` });
+    return;
+   }
+
+   const btn = el.createEl("button", { text: buttonText || "Ativar Quest" });
+   btn.classList.add("mod-cta");
+
    btn.onclick = async () => {
-    // Se já ativa e não concluída, impede
-    const today = new Date().toISOString().split('T')[0];
-    if (this.settings.manualQuests.includes(questId) &&
-        quest.availableDate === today &&
-        !quest.completed
+    const today = new Date().toISOString().split("T")[0];
+    if (
+      this.settings.manualQuests.includes(questId) &&
+      quest.availableDate === today &&
+      !quest.completed
     ) {
       new Notice("Essa quest já está ativa.");
       return;
     }
-    // Ativa
+
     quest.availableDate = today;
     quest.completed = false;
     quest.lastCompleted = "";
@@ -609,6 +632,7 @@ export default class RPGLevelsPlugin extends Plugin {
     new Notice(`Quest "${quest.title}" ativada!`);
     };
    });
+
 
 		
 		

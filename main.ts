@@ -1021,19 +1021,44 @@ async applyAllPassiveEffects() {
             if (!metadata) continue;
 
             for (const key in metadata) {
-                const levelMatch = key.match(/^lvl(\d+)$/);
-                if (levelMatch) {
-                    const featureLevel = parseInt(levelMatch[1], 10);
-                    if (this.settings.level >= featureLevel) {
-                        const featureData = metadata[key];
-                        if (featureData && typeof featureData.grantsClassFeat === 'string') {
-                            // Add the granted class feat to our settings
-                            if (!this.settings.obtainedClassFeats.includes(featureData.grantsClassFeat)) {
-                                this.settings.obtainedClassFeats.push(featureData.grantsClassFeat);
-                            }
-                        }
-                    }
+              const levelMatch = key.match(/^lvl(\d+)$/);
+              if (!levelMatch) continue;
+              const featureLevel = parseInt(levelMatch[1], 10);
+              if (this.settings.level < featureLevel) continue;
+              const raw = metadata[key];
+              const featsToGrant: string[] = [];
+              // 1) Formato antigo: objeto { grantsClassFeat: "..." }
+              if (typeof raw === 'object' && !Array.isArray(raw) && raw.grantsClassFeat) {
+                if (typeof raw.grantsClassFeat === 'string') {
+                  featsToGrant.push(raw.grantsClassFeat);
+                } else if (Array.isArray(raw.grantsClassFeat)) {
+                  featsToGrant.push(...raw.grantsClassFeat);
                 }
+              }
+              // 2) Novo: lista de objetos ou strings
+              if (Array.isArray(raw)) {
+                for (const entry of raw) {
+                  if (typeof entry === 'object' && entry.grantsClassFeat) {
+                    // Caso seja objeto { grantsClassFeat: ... }
+                    if (typeof entry.grantsClassFeat === 'string') {
+                      featsToGrant.push(entry.grantsClassFeat);
+                    } else if (Array.isArray(entry.grantsClassFeat)) {
+                      featsToGrant.push(...entry.grantsClassFeat);
+                    }
+                  }
+                  else if (typeof entry === 'string' && entry.startsWith('grantsClassFeat:')) {
+                    // Caso seja string "grantsClassFeat: caminho"
+                    const path = entry.split(':').slice(1).join(':').trim();
+                    featsToGrant.push(path);
+                  }
+                }
+              }
+              // 3) Adiciona cada feat ao settings, sem duplicar
+              for (const featPath of featsToGrant) {
+                if (!this.settings.obtainedClassFeats.includes(featPath)) {
+                  this.settings.obtainedClassFeats.push(featPath);
+                }
+              }            
             }
         }
     }

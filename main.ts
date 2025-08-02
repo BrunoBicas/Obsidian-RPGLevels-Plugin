@@ -889,42 +889,60 @@ async loadEffectDataWithLevels(path: string, characterLevel: number): Promise<an
 
     // Itera por TODAS as chaves no frontmatter
     for (const [key, value] of Object.entries(metadata)) {
-        // Verifica se a chave é um bônus de nível (ex: "lvl1", "lvl5")
-        const levelMatch = key.match(/^lvl(\d+)$/);
+   const levelMatch = key.match(/^lvl(\d+)$/);
 
-        if (levelMatch) {
-            const featureLevel = parseInt(levelMatch[1], 10);
-            // Se o nível do personagem for suficiente para desbloquear a característica
-            if (characterLevel >= featureLevel && typeof value === 'object' && value !== null) {
-                // Adiciona os bônus desta característica ao objeto combinado
-                for (const [bonusKey, bonusValue] of Object.entries(value)) {
-                    // Ignora chaves que não são bônus diretos
-                    if (bonusKey === 'description' || bonusKey === 'classEffect' || bonusKey === 'grantsClassFeat') continue;
+   if (levelMatch) {
+    const featureLevel = parseInt(levelMatch[1], 10);
 
-                    if (typeof bonusValue === 'number') {
-                        combinedBonuses[bonusKey] = (combinedBonuses[bonusKey] || 0) + bonusValue;
-                    } else if (Array.isArray(bonusValue)) {
-                        combinedBonuses[bonusKey] = [...(combinedBonuses[bonusKey] || []), ...bonusValue];
-                    } else {
-                        combinedBonuses[bonusKey] = bonusValue;
-                    }
-                }
+    if (characterLevel >= featureLevel) {
+      // Suporte a lista de objetos (forma tradicional)
+      if (Array.isArray(value)) {
+        for (const entry of value) {
+          if (typeof entry === 'object' && entry !== null) {
+            for (const [bonusKey, bonusValue] of Object.entries(entry)) {
+              combinedBonuses[bonusKey] = bonusValue;
             }
-        } 
-        // Adiciona bônus que não são de nível (os bônus base)
-        else if (!key.match(/^lvl\d+$/)) {
-  if (typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean') {
-    combinedBonuses[key] = value;
-  } else if (Array.isArray(value)) {
-    combinedBonuses[key] = [...(combinedBonuses[key] || []), ...value];
-  } else if (typeof value === 'object' && value !== null) {
-    combinedBonuses[key] = value; // <-- AQUI ENTRA o objeto `action`
-  }
+          }
+
+          // SUPORTE NOVO: lista de strings tipo "hpBonus: 2"
+          if (typeof entry === 'string' && entry.includes(":")) {
+            const [rawKey, ...rest] = entry.split(":");
+            const bonusKey = rawKey.trim();
+            const bonusValueRaw = rest.join(":").trim();
+
+            let bonusValue: any = bonusValueRaw;
+            if (!isNaN(Number(bonusValueRaw))) {
+              bonusValue = Number(bonusValueRaw);
+            }
+
+            combinedBonuses[bonusKey] = bonusValue;
+          }
+        }
+      }
+
+      // Suporte ao antigo formato direto como objeto
+      else if (typeof value === 'object' && value !== null) {
+        for (const [bonusKey, bonusValue] of Object.entries(value)) {
+          combinedBonuses[bonusKey] = bonusValue;
+        }
+      }
+    }
+   }
+
+   // BONUS BASE (fora de lvlX)
+   if (!key.match(/^lvl\d+$/)) {
+    if (typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean') {
+      combinedBonuses[key] = value;
+    } else if (Array.isArray(value)) {
+      combinedBonuses[key] = [...(combinedBonuses[key] || []), ...value];
+    } else if (typeof value === 'object' && value !== null) {
+      combinedBonuses[key] = value;
+    }
+   }
  }
 
-    }
 
-    return combinedBonuses;
+ return combinedBonuses;
 }
 
 async applyAllPassiveEffects() {

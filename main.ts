@@ -1405,12 +1405,13 @@ async applyAllPassiveEffects() {
     await this.saveSettings();
 }
 
-// NOVO CÓDIGO para executeSingleUseEffect
 public async executeSingleUseEffect(action: any): Promise<void> {
   const health = this.settings.health;
+  const defenses = this.settings.defenses; // Pega as defesas do personagem
+
   switch (action.type) {
     case "heal": {
-      const healed = Math.min(action.amount||0, health.maxHP - health.currentHP);
+      const healed = Math.min(action.amount || 0, health.maxHP - health.currentHP);
       if (healed > 0) {
         health.currentHP += healed;
         new Notice(`Curou ${healed} de HP.`);
@@ -1418,31 +1419,73 @@ public async executeSingleUseEffect(action: any): Promise<void> {
       break;
     }
     case "tempHeal": {
-      await this.healTempHP(action.amount||0);
+      await this.healTempHP(action.amount || 0);
       break;
     }
     case "damage": {
       const ac = this.getCurrentAC();
       let hit = true;
+
+      // 1. Verificação de acerto contra AC
       if (action.requiresAC && action.attackRoll !== undefined) {
         hit = action.attackRoll >= ac;
       }
       if (!hit) {
-        new Notice(`Ataque falhou (CA ${ac}).`);
+        new Notice(`Ataque falhou (CA ${ac}). Nenhum dano ou efeito foi aplicado.`);
         return;
       }
-      const damage = action.amount||0;
-      const effectiveTempHP = this.getEffectiveTempHP();
-      const toTemp = Math.min(damage, effectiveTempHP);
-      if (toTemp > 0) health.tempHPDamage = (health.tempHPDamage||0) + toTemp;
-      const remaining = damage - toTemp;
-      if (remaining > 0) health.currentHP = Math.max(0, health.currentHP - remaining);
-      new Notice(`Recebeu ${damage} de dano.`);
+
+      // 2. LÓGICA ATUALIZADA: Verificar Imunidades e Resistências
+      let finalDamage = action.amount || 0;
+      const initialDamage = finalDamage;
+      const damageType = action.damageType || 'Typeless';
+      let defenseMessage = "";
+
+      if (damageType !== 'Typeless' && defenses) {
+        // Verifica imunidade PRIMEIRO, pois tem precedência
+        if (defenses.immunities && defenses.immunities[damageType]?.length > 0) { 
+          finalDamage = 0;
+          defenseMessage = `Imune a ${damageType}!`;
+        } 
+        // INCLUSÃO DA LÓGICA DE RESISTÊNCIA
+        // Se não for imune, então verifica se é resistente
+        else if (defenses.resistances && defenses.resistances[damageType]?.length > 0) { 
+          finalDamage = Math.floor(initialDamage / 2); // Reduz o dano pela metade, arredondando para baixo
+          defenseMessage = `Resistiu a ${damageType}! (${initialDamage} -> ${finalDamage})`;
+        }
+      }
+      
+      // Notifica o resultado completo
+      new Notice(`Recebeu um ataque de ${initialDamage} de dano do tipo ${damageType}. ${defenseMessage}`);
+
+      // 3. Se o dano foi zerado, não faz mais nada
+      if (finalDamage <= 0) {
+        if (!defenseMessage.includes("Imune")) { // Adiciona notificação apenas se não for por imunidade
+            new Notice(`Nenhum dano foi sofrido.`);
+        }
+        await this.saveSettings();
+        return;
+      }
+
+      // 4. Aplica o DANO FINAL, já ajustado pelas defesas
+      const effectiveTempHP = this.getEffectiveTempHP(); 
+      const toTemp = Math.min(finalDamage, effectiveTempHP);
+      if (toTemp > 0) {
+        health.tempHPDamage = (health.tempHPDamage || 0) + toTemp; 
+      }
+
+      const remaining = finalDamage - toTemp; 
+      if (remaining > 0) {
+        health.currentHP = Math.max(0, health.currentHP - remaining); 
+      }
+      
+      new Notice(`Sofreu ${finalDamage} de dano efetivo.`);
       break;
     }
     default:
       new Notice("Ação desconhecida no efeito.");
   }
+  
   await this.saveSettings();
 }
 

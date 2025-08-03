@@ -931,13 +931,39 @@ async loadEffectDataWithLevels(path: string, characterLevel: number): Promise<an
 
    // BONUS BASE (fora de lvlX)
    if (!key.match(/^lvl\d+$/)) {
-    if (typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean') {
-      combinedBonuses[key] = value;
-    } else if (Array.isArray(value)) {
-      combinedBonuses[key] = [...(combinedBonuses[key] || []), ...value];
-    } else if (typeof value === 'object' && value !== null) {
-      combinedBonuses[key] = value;
-    }
+     const value = metadata[key];
+     // ✅ Verifica se é uma lista de strings tipo "key: value"
+     if (Array.isArray(value) && value.every(item => typeof item === 'string' && item.includes(":"))) {
+       const obj: Record<string, any> = {};
+       for (const entry of value) {
+         const [rawKey, ...rest] = entry.split(":");
+         const bonusKey = rawKey.trim();
+         const bonusValueRaw = rest.join(":").trim();
+         let bonusValue: any = bonusValueRaw;
+         if (!isNaN(Number(bonusValueRaw))) {
+           bonusValue = Number(bonusValueRaw);
+         } else if (bonusValueRaw === "true" || bonusValueRaw === "false") {
+           bonusValue = bonusValueRaw === "true";
+         }
+         obj[bonusKey] = bonusValue;
+       }
+       // Se for "action" ou "actionN", converte em array de ações
+       if (key === "action") {
+         if (!combinedBonuses["action"]) combinedBonuses["action"] = [];
+         combinedBonuses["action"].push(obj);
+       } else if (key.match(/^action\d+$/)) {
+         if (!combinedBonuses["action"]) combinedBonuses["action"] = [];
+         combinedBonuses["action"].push(obj);
+       } else {
+         combinedBonuses[key] = obj;
+       }
+     }
+     // Outros tipos comuns
+     else if (typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean') {
+       combinedBonuses[key] = value;
+     } else if (typeof value === 'object' && value !== null) {
+       combinedBonuses[key] = value;
+     }
    }
  }
 
@@ -1137,19 +1163,23 @@ async applyAllPassiveEffects() {
 
       // DENTRO DE applyAllPassiveEffects
        if (effectData.usesEffect && effectData.action) {
-      const unexecutedInstances = Object.entries(this.settings.effects)
-        .filter(([id, eff]) =>
-          eff.notePath === sourcePath &&
-          eff.active &&
-          !eff.executed &&
-          !this.isEffectExpired(eff)
-        );
-
-      for (const [effectId] of unexecutedInstances) {
-        await this.executeSingleUseEffect(effectData.action);
-        this.settings.effects[effectId].executed = true;
+        const unexecutedInstances = Object.entries(this.settings.effects)
+          .filter(([id, eff]) =>
+            eff.notePath === sourcePath &&
+            eff.active &&
+            !eff.executed &&
+            !this.isEffectExpired(eff)
+          );
+        for (const [effectId] of unexecutedInstances) {
+          const actions = Array.isArray(effectData.action)
+            ? effectData.action
+            : [effectData.action];
+          for (const action of actions) {
+            await this.executeSingleUseEffect(action);
+          }
+          this.settings.effects[effectId].executed = true;
+        }
       }
-    }
      // Efeitos disponíveis nas pastas de Class Effects
    const grantableClassEffects = this.getAllClassEffectPaths();
    const allUnlockedEffects = this.settings.unlockedEffects;

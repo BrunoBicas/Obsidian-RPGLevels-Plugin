@@ -30,10 +30,10 @@ export class Lvl20ShopModal extends Modal {
     });
 
     new Setting(contentEl)
-      .setName("Comprar 1 Feat Point")
-      .setDesc("Custa 200.000 XP")
+      .setName("Buy 1 Feat Point")
+      .setDesc("200.000 XP")
       .addButton(btn => {
-        btn.setButtonText("Comprar")
+        btn.setButtonText("Buy")
           .setCta()
           .setDisabled(possiblePurchases <= 0)
           .onClick(async () => {
@@ -45,7 +45,7 @@ export class Lvl20ShopModal extends Modal {
             this.plugin.settings.currentXP -= 200000;
             this.plugin.settings.featPoints += 1;
             await this.plugin.saveSettings();
-            new Notice("Feat Point comprado com sucesso!");
+            new Notice("+ 1 Feat Point!");
             this.close();
           });
       });

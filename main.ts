@@ -2499,6 +2499,19 @@ class StatsModal extends Modal {
     const level = this.plugin.settings.level;
     contentEl.createEl("h3", { text: `Feat Points disponíveis: ${this.plugin.settings.featPoints ?? 0}` });
 
+    if (this.plugin.settings.level >= 20) {
+   new Setting(contentEl)
+    .setName("Lvl 20 Shop")
+    .setDesc("XP to buy Feat Points.")
+    .addButton(btn => {
+      btn.setButtonText("Abrir Loja")
+        .setCta()
+        .onClick(() => {
+          new Lvl20ShopModal(this.app, this.plugin).open();
+        });
+    });
+    }
+
     
 
 	  contentEl.createEl("hr"); // Separator
@@ -2556,20 +2569,7 @@ class StatsModal extends Modal {
     
     contentEl.createEl("hr");
 
-    if (this.plugin.settings.level >= 20) {
-  new Setting(contentEl)
-    .setName("Lvl 20 Shop")
-    .setDesc("Gaste XP para comprar Feat Points.")
-    .addButton(btn => {
-      btn.setButtonText("Abrir Loja")
-        .setCta()
-        .onClick(() => {
-          new Lvl20ShopModal(this.app, this.plugin).open();
-        });
-    });
-}
-
-
+    
     // === SEÇÃO DE SAVING THROWS (COM PROFICIÊNCIA) - COLAPSÁVEL ===
     const savingThrowsHeader = contentEl.createEl("h3", { 
         text: "🛡️ Saving Throws (Click to expand)", 

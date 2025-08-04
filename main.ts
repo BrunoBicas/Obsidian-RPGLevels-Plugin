@@ -1,6 +1,7 @@
 import { App, Plugin, PluginSettingTab, Setting, TFile, MarkdownView, Notice, Modal, TFolder, TAbstractFile, FuzzySuggestModal, MarkdownRenderer } from 'obsidian';
 import { Dice } from "./dice";
 import { ArmorClassModal } from "./ArmorClassModal";
+import { Lvl20ShopModal } from "./Lvl20ShopModal";
 
 
 
@@ -1598,16 +1599,6 @@ public getAllClassEffectPaths(): string[] {
 		if (this.settings.currentXP >= this.settings.xpToNextLevel) {
 			this.levelUp();
 		} 
-		if (this.settings.level > 20) {
-			const xpSinceLevel20 = this.settings.currentXP + this.getTotalXPUpToLevel(this.settings.level - 1) - this.getTotalXPUpToLevel(20);
-			const bonusPoints = Math.floor(xpSinceLevel20 / 200000);
-		
-			if (bonusPoints > (this.settings.extraFeatPointsGranted || 0)) {
-				const extra = bonusPoints - (this.settings.extraFeatPointsGranted || 0);
-				this.settings.featPoints += extra;
-				this.settings.extraFeatPointsGranted = bonusPoints;
-			}
-		}
 		else {
 			this.updateStatusBar();
 			this.saveSettings();
@@ -1691,7 +1682,34 @@ public getAllClassEffectPaths(): string[] {
 			this.settings.featPoints = (this.settings.featPoints || 0) + 1;
 		}
 		this.settings.currentXP = this.settings.currentXP - this.settings.xpToNextLevel;
-		this.settings.xpToNextLevel = Math.floor(this.settings.xpToNextLevel * 1.5); // Increase XP required for next level
+    const dndXpTable: number[] = [
+    0,       // Level 1
+    300,     // Level 2
+    900,     // Level 3
+    2700,    // Level 4
+    6500,    // Level 5
+    14000,   // Level 6
+    23000,   // Level 7
+    34000,   // Level 8
+    48000,   // Level 9
+    64000,   // Level 10
+    85000,   // Level 11
+    100000,  // Level 12
+    120000,  // Level 13
+    140000,  // Level 14
+    165000,  // Level 15
+    195000,  // Level 16
+    225000,  // Level 17
+    265000,  // Level 18
+    305000,  // Level 19
+    355000   // Level 20
+   ];
+		const nextLevel = this.settings.level + 1; // Increase XP required for next level
+    if (nextLevel <= 20) {
+      this.settings.xpToNextLevel = dndXpTable[nextLevel - 1]; // índice começa em 0
+    } else {
+        this.settings.xpToNextLevel = Infinity; // trava o XPToNextLevel após o 20
+    }
 		
 		this.updateStatusBar();
 		this.saveSettings();
@@ -2537,6 +2555,20 @@ class StatsModal extends Modal {
     });
     
     contentEl.createEl("hr");
+
+    if (this.plugin.settings.level >= 20) {
+  new Setting(contentEl)
+    .setName("Lvl 20 Shop")
+    .setDesc("Gaste XP para comprar Feat Points.")
+    .addButton(btn => {
+      btn.setButtonText("Abrir Loja")
+        .setCta()
+        .onClick(() => {
+          new Lvl20ShopModal(this.app, this.plugin).open();
+        });
+    });
+}
+
 
     // === SEÇÃO DE SAVING THROWS (COM PROFICIÊNCIA) - COLAPSÁVEL ===
     const savingThrowsHeader = contentEl.createEl("h3", { 
@@ -4826,6 +4858,31 @@ class RPGLevelsSettingTab extends PluginSettingTab {
 		containerEl.empty();
 		
 		containerEl.createEl('h2', { text: 'RPG Levels Plugin Settings' });
+
+    new Setting(containerEl)
+  .setName("Alterar Nível Manualmente")
+  .setDesc("Apenas para testes. Altera o nível atual do personagem. XP não é modificado automaticamente.")
+  .addText(text => text
+    .setPlaceholder("Ex: 5")
+    .setValue(this.plugin.settings.level.toString())
+    .onChange(async (value) => {
+      const parsed = parseInt(value);
+      if (!isNaN(parsed) && parsed >= 1 && parsed <= 20) {
+        this.plugin.settings.level = parsed;
+        // Atualiza xpToNextLevel com base na tabela D&D
+        const dndXpTable = [
+          0, 300, 900, 2700, 6500, 14000, 23000, 34000, 48000, 64000,
+          85000, 100000, 120000, 140000, 165000, 195000, 225000, 265000, 305000, 355000
+        ];
+        this.plugin.settings.xpToNextLevel = dndXpTable[parsed] ?? Infinity;
+        await this.plugin.applyAllPassiveEffects(); // Recalcular tudo
+        await this.plugin.saveSettings();
+        new Notice(`Nível ajustado manualmente para ${parsed}.`);
+      } else {
+        new Notice("Por favor, insira um número entre 1 e 20.");
+      }
+    }));
+
 
 		// Variáveis temporárias
         let questPeriodStart = '';

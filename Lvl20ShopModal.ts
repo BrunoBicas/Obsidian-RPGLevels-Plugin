@@ -43,7 +43,8 @@ export class Lvl20ShopModal extends Modal {
             }
 
             this.plugin.settings.currentXP -= 200000;
-            this.plugin.settings.featPoints += 1;
+            this.plugin.settings.extraFeatPointsGranted += 1;
+            await this.plugin.applyAllPassiveEffects();
             await this.plugin.saveSettings();
             new Notice("+ 1 Feat Point!");
             this.close();

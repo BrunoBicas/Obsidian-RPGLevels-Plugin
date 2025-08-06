@@ -1677,7 +1677,9 @@ public getAllClassEffectPaths(): string[] {
  }
 
 	levelUp() {
-		this.settings.level++;
+    if (this.settings.level < 20) {
+		 this.settings.level++;
+    }
 		if (this.settings.level >= 20) {
 			this.settings.featPoints = (this.settings.featPoints || 0) + 1;
 		}
@@ -1702,7 +1704,7 @@ public getAllClassEffectPaths(): string[] {
     225000,  // Level 17
     265000,  // Level 18
     305000,  // Level 19
-    355000   // Level 20
+    355000,   // Level 20
    ];
 		const nextLevel = this.settings.level + 1; // Increase XP required for next level
     if (nextLevel <= 20) {

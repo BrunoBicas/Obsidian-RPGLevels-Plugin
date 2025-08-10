@@ -73,6 +73,7 @@ interface HealthData {
   tempHPDamage?: number;
   lastMaxHP: number;
   lastMaxPotentialTempHP?: number;
+  yamlHPBonusDetails?: { source: string; amount: number }[];
 }
 
 interface SkillDefinition {
@@ -979,6 +980,7 @@ async applyAllPassiveEffects() {
     let accumulatedFeatHpBonus = 0;
     let accumulatedEffectHpBonus = 0;
     let accumulatedFeatPointBonus = 0;
+    let yamlHPBonusDetails: { source: string; amount: number }[] = [];
     let manualFeatPoints: number;
     
 
@@ -1107,13 +1109,18 @@ async applyAllPassiveEffects() {
         const effectData = await this.loadEffectDataWithLevels(sourcePath, this.settings.level);
 
         // A partir daqui, a lógica corrigida com os tipos definidos
-        if (effectData.hpBonus) {
-  if (this.settings.obtainedFeats.includes(sourcePath) || this.settings.obtainedClassFeats.includes(sourcePath)) {
-    accumulatedFeatHpBonus += effectData.hpBonus;
-  } else {
-    accumulatedEffectHpBonus += effectData.hpBonus;
+    if (effectData.hpBonus) {
+        yamlHPBonusDetails.push({
+            source: sourcePath,
+            amount: effectData.hpBonus
+        });
+
+        if (this.settings.obtainedFeats.includes(sourcePath) || this.settings.obtainedClassFeats.includes(sourcePath)) {
+            accumulatedFeatHpBonus += effectData.hpBonus;
+        } else {
+            accumulatedEffectHpBonus += effectData.hpBonus;
+        }
     }
-   }
 
         if (effectData.featPointBonus) accumulatedFeatPointBonus += effectData.featPointBonus; // <-- ADICIONE ESTA LINHA
         
@@ -1377,6 +1384,7 @@ async applyAllPassiveEffects() {
     this.settings.health.maxHP = newMaxHP;
     this.settings.health.featHPBonus = accumulatedFeatHpBonus;
     this.settings.health.effectHPBonus = accumulatedEffectHpBonus;
+    this.settings.health.yamlHPBonusDetails = yamlHPBonusDetails;
 
     // Preserve current HP on reload by only adjusting when not initializing
     if (!this.isInitializing) {
@@ -1676,86 +1684,74 @@ public getAllClassEffectPaths(): string[] {
   return Math.ceil(Math.random() * this.settings.health.baseDie);
  }
 
-	levelUp() {
-    if (this.settings.level < 20) {
-		 this.settings.level++;
-    }
-		if (this.settings.level >= 20) {
-			this.settings.featPoints = (this.settings.featPoints || 0) + 1;
-		}
-		this.settings.currentXP = this.settings.currentXP - this.settings.xpToNextLevel;
-    const dndXpTable: number[] = [
-    0,       // Level 1
-    300,     // Level 2
-    900,     // Level 3
-    2700,    // Level 4
-    6500,    // Level 5
-    14000,   // Level 6
-    23000,   // Level 7
-    34000,   // Level 8
-    48000,   // Level 9
-    64000,   // Level 10
-    85000,   // Level 11
-    100000,  // Level 12
-    120000,  // Level 13
-    140000,  // Level 14
-    165000,  // Level 15
-    195000,  // Level 16
-    225000,  // Level 17
-    265000,  // Level 18
-    305000,  // Level 19
-    355000,   // Level 20
-   ];
-		const nextLevel = this.settings.level + 1; // Increase XP required for next level
-    if (nextLevel <= 20) {
-      this.settings.xpToNextLevel = dndXpTable[nextLevel - 1]; // índice começa em 0
-    } else {
-        this.settings.xpToNextLevel = Infinity; // trava o XPToNextLevel após o 20
-    }
-		
-		this.updateStatusBar();
-		this.saveSettings();
-		this.checkAchievements();
-
-		const statBonus = Math.floor(this.settings.level / 4);
-		this.settings.characterStats = {
-		  Strength: 10 + statBonus,
-		  Dexterity: 10 + statBonus,
-		  Constitution: 10 + statBonus,
-		  Intelligence: 10 + statBonus,
-		  Wisdom: 10 + statBonus,
-		  Charisma: 10 + statBonus,
-		};
-
-		const conMod = Math.floor((this.settings.characterStats.Constitution - 10) / 2);
-        const modoHP = this.settings.health.autoHpMode ?? "maximo";
-        const baseDie = this.settings.health.baseDie;
-
-       let hpBase: number;
-
-      if (this.settings.level === 1) {
-       hpBase = baseDie; // Sempre ganha o máximo no nível 1
-       } else {
-       hpBase = calcularHPPorNivel(baseDie, modoHP);
+  levelUp() {
+      // 🔹 Travar completamente se já está no 20
+      if (this.settings.level >= 20) {
+          // Aqui você pode adicionar lógica especial pós-20 se quiser
+          // Ex: feat points extras por XP adicional
+          return;
       }
 
-     const gainedHP = Math.max(1, hpBase + conMod);
+      // 🔹 Incrementar nível
+      this.settings.level++;
 
+      // 🔹 Se atingiu 20 exatamente, dá o último feat point e trava XP
+      if (this.settings.level === 20) {
+          this.settings.featPoints = (this.settings.featPoints || 0) + 1;
+          this.settings.xpToNextLevel = Infinity;
+      }
 
-        this.settings.health.hpPerLevel.push(gainedHP);
-        this.settings.health.maxHP += gainedHP;
-        this.settings.health.currentHP += gainedHP; // opcional: cura ao upar   
+      // 🔹 Recalcular XP para o próximo nível
+      const dndXpTable: number[] = [
+          0, 300, 900, 2700, 6500, 14000, 23000, 34000, 48000, 64000,
+          85000, 100000, 120000, 140000, 165000, 195000, 225000,
+          265000, 305000, 355000
+      ];
+      const nextLevel = this.settings.level + 1;
+      this.settings.xpToNextLevel = nextLevel <= 20
+          ? dndXpTable[nextLevel - 1]
+          : Infinity;
 
+      // 🔹 Reduz o XP atual corretamente
+      this.settings.currentXP = Math.max(
+          0,
+          this.settings.currentXP - (dndXpTable[this.settings.level - 1] || 0)
+      );
 
-		const featLevels = [2, 4, 8, 12, 16, 19];
-		if (featLevels.includes(this.settings.level)) {
-			this.settings.featPoints = (this.settings.featPoints ?? 0) + 1;
-			new Notice(`Ganhou 1 Feat Point por alcançar o nível ${this.settings.level}!`);
-		}
-		
-		// Show level up message with more fanfare
-		new Notice(`🎉 LEVEL UP! 🎉 You reached level ${this.settings.level}!`, 5000);
-	}
+      // 🔹 Atualiza status
+      this.updateStatusBar();
+
+      // 🔹 HP ganho nesse nível
+      const conMod = Math.floor((this.settings.characterStats.Constitution - 10) / 2);
+      const modoHP = this.settings.health.autoHpMode ?? "maximo";
+      const baseDie = this.settings.health.baseDie;
+      let hpBase = this.settings.level === 1
+          ? baseDie
+          : calcularHPPorNivel(baseDie, modoHP);
+      const gainedHP = Math.max(1, hpBase + conMod);
+
+      // 🔹 Atualiza histórico de HP por nível
+      this.settings.health.hpPerLevel = this.settings.health.hpPerLevel.slice(0, this.settings.level - 1);
+      this.settings.health.hpPerLevel = 
+          this.settings.health.hpPerLevel.slice(0, this.settings.level - 1);
+      this.settings.health.hpPerLevel.push(gainedHP);
+      this.settings.health.maxHP += gainedHP;
+      this.settings.health.currentHP += gainedHP;
+
+      // 🔹 Feat points em níveis específicos
+      const featLevels = [2, 4, 8, 12, 16, 19];
+      if (featLevels.includes(this.settings.level)) {
+          this.settings.featPoints = (this.settings.featPoints ?? 0) + 1;
+          new Notice(`Ganhou 1 Feat Point por alcançar o nível ${this.settings.level}!`);
+      }
+
+      // 🔹 Mensagem de Level Up
+      new Notice(`🎉 LEVEL UP! 🎉 Você chegou ao nível ${this.settings.level}!`, 5000);
+
+      // 🔹 Salvar alterações
+      this.saveSettings();
+  }
+
 
 	getTotalXPUpToLevel(level: number): number {
 		let xp = 0;
@@ -2969,6 +2965,8 @@ class HPManagementModal extends Modal {
  const conMod = Math.floor((this.plugin.settings.characterStats.Constitution - 10) / 2);
  const constitutionHPBonus = conMod * this.plugin.settings.level;
  const f1eatHPBonus = this.plugin.settings.health.featHPBonus || 0;
+ const bonusLvLYaml = (this.plugin.settings.health.yamlHPBonusDetails ?? [])
+    .reduce((sum, e) => sum + e.amount, 0);
  
 
 
@@ -2976,7 +2974,7 @@ class HPManagementModal extends Modal {
     contentEl.createEl("h3", { text: "✨ Bônus de HP" });
 
     contentEl.createEl("p", {
-      text: `🧠 De Feats: ${f1eatHPBonus}`
+      text: `🧠 De Feats: ${featHPBonus}`
     });
 	
 	contentEl.createEl("p", {
@@ -2988,9 +2986,41 @@ class HPManagementModal extends Modal {
       text: `🌀 De Efeitos/Status Ativos: ${effectHPBonus}`
     });
 
-    contentEl.createEl("h3", {
-      text: `🔢 Total de HP Máximo: ${totalHPFromLevels + f1eatHPBonus + effectHPBonus + constitutionHPBonus} = ${totalHPFromLevels} (níveis) + ${f1eatHPBonus} (feats) + ${effectHPBonus} (efeitos) + ${constitutionHPBonus} (Constituição)`
+   if (this.plugin.settings.health.yamlHPBonusDetails?.length) {
+    // Criar o título primeiro
+    contentEl.createEl("h4", { text: "Bônus de HP por YAML (lvlX)" });
+
+    contentEl.createEl("p", {
+      text: `LVL De YAML lvlX Ativos: ${bonusLvLYaml}`
     });
+    
+    // Criar o botão de toggle
+    const toggleBtn = contentEl.createEl("button", { text: "Mostrar HP YAML ▼" });
+    
+    // Criar o container que será mostrado/escondido
+    const yamlContainer = contentEl.createDiv({ cls: "yaml-hp-details" });
+    yamlContainer.style.display = "none";
+
+    // Adicionar o evento de clique no botão
+    toggleBtn.addEventListener("click", () => {
+        const isHidden = yamlContainer.style.display === "none";
+        yamlContainer.style.display = isHidden ? "block" : "none";
+        toggleBtn.textContent = isHidden ? "Esconder HP YAML ▲" : "Mostrar HP YAML ▼";
+    });
+
+    // Preencher o container com os dados
+    this.plugin.settings.health.yamlHPBonusDetails.forEach(entry => {
+        const fileName = entry.source.split("/").pop()?.replace(".md", "") || entry.source;
+        yamlContainer.createEl("p", {
+            text: `+${entry.amount} HP — ${fileName}`
+        });
+    });
+    }
+
+      contentEl.createEl("h3", {
+          text: `🔢 Total de HP Máximo: ${totalHPFromLevels + featHPBonus + effectHPBonus + constitutionHPBonus + bonusLvLYaml} = ${totalHPFromLevels} (níveis) + ${featHPBonus} (feats) + ${effectHPBonus} (efeitos) + ${constitutionHPBonus} (Constituição) + ${bonusLvLYaml} (YAML lvlX)`
+      });
+
 
 	    contentEl.createEl("hr"); // Optional separator
 

@@ -1109,18 +1109,20 @@ async applyAllPassiveEffects() {
         const effectData = await this.loadEffectDataWithLevels(sourcePath, this.settings.level);
 
         // A partir daqui, a lógica corrigida com os tipos definidos
-    if (effectData.hpBonus) {
-        yamlHPBonusDetails.push({
-            source: sourcePath,
-            amount: effectData.hpBonus
-        });
+        if (effectData.hpBonus) {
+            const isFromFeat = this.settings.obtainedFeats.includes(sourcePath) || this.settings.obtainedClassFeats.includes(sourcePath);
 
-        if (this.settings.obtainedFeats.includes(sourcePath) || this.settings.obtainedClassFeats.includes(sourcePath)) {
-            accumulatedFeatHpBonus += effectData.hpBonus;
-        } else {
-            accumulatedEffectHpBonus += effectData.hpBonus;
+            if (isFromFeat) {
+                accumulatedFeatHpBonus += effectData.hpBonus;
+            } else {
+                accumulatedEffectHpBonus += effectData.hpBonus;
+                yamlHPBonusDetails.push({
+                    source: sourcePath,
+                    amount: effectData.hpBonus
+                });
+            }
         }
-    }
+
 
         if (effectData.featPointBonus) accumulatedFeatPointBonus += effectData.featPointBonus; // <-- ADICIONE ESTA LINHA
         
@@ -1687,6 +1689,8 @@ public getAllClassEffectPaths(): string[] {
   levelUp() {
       // 🔹 Travar completamente se já está no 20
       if (this.settings.level >= 20) {
+            this.updateStatusBar();
+            this.saveSettings();
           // Aqui você pode adicionar lógica especial pós-20 se quiser
           // Ex: feat points extras por XP adicional
           return;
@@ -2974,7 +2978,7 @@ class HPManagementModal extends Modal {
     contentEl.createEl("h3", { text: "✨ Bônus de HP" });
 
     contentEl.createEl("p", {
-      text: `🧠 De Feats: ${featHPBonus}`
+      text: `🧠 De Feats: ${f1eatHPBonus}`
     });
 	
 	contentEl.createEl("p", {
@@ -3018,7 +3022,7 @@ class HPManagementModal extends Modal {
     }
 
       contentEl.createEl("h3", {
-          text: `🔢 Total de HP Máximo: ${totalHPFromLevels + featHPBonus + effectHPBonus + constitutionHPBonus + bonusLvLYaml} = ${totalHPFromLevels} (níveis) + ${featHPBonus} (feats) + ${effectHPBonus} (efeitos) + ${constitutionHPBonus} (Constituição) + ${bonusLvLYaml} (YAML lvlX)`
+          text: `🔢 Total de HP Máximo: ${totalHPFromLevels + f1eatHPBonus + effectHPBonus + constitutionHPBonus + bonusLvLYaml} = ${totalHPFromLevels} (níveis) + ${f1eatHPBonus} (feats) + ${effectHPBonus} (efeitos) + ${constitutionHPBonus} (Constituição) + ${bonusLvLYaml} (YAML lvlX)`
       });
 
 

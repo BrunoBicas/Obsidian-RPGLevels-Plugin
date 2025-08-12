@@ -6,3 +6,1122 @@ available in the app when your plugin is enabled.
 If your plugin does not need CSS, delete this file.
 
 */
+/* Spellbook Plugin Styles */
+/* Main containers */
+.dnd-spellbook-container, 
+.known-spells-container {
+  position: relative;
+  padding: 20px;
+  height: 100%;
+}
+
+/* Modern spellbook layout */
+.modern-spellbook-layout {
+  background-color: #f9f9f9;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+/* Scrollable container */
+.spellbook-scroll-container {
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 0 15px;
+  margin-bottom: 20px;
+  scrollbar-width: thin;
+}
+
+/* For WebKit browsers */
+.spellbook-scroll-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+.spellbook-scroll-container::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 10px;
+}
+
+.spellbook-scroll-container::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 10px;
+}
+
+/* Close button */
+.close-spellbook-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 4px 8px;
+  background: #f44336;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.close-spellbook-btn:hover {
+  background: #d32f2f;
+}
+
+/* Navigation buttons */
+.spellbook-nav-buttons {
+  display: flex;
+  justify-content: center;
+  margin: 10px 0;
+}
+
+.nav-btn {
+  padding: 6px 12px;
+  margin: 0 5px;
+  background: #4caf50;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.nav-btn:hover {
+  background: #388e3c;
+}
+
+/* Spell cards */
+.spell-card {
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+  background: #f9f9f9;
+  transition: all 0.2s;
+}
+/* Extra uses badges and items */
+.extra-uses-badge {
+  display: inline-block;
+  background-color: #4caf50;
+  color: white;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  margin-left: 8px;
+}
+
+.extra-use-item {
+  padding: 8px;
+  margin-bottom: 8px;
+  border-radius: 4px;
+  background-color: rgba(0, 0, 0, 0.05);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.spell-card:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.spell-card.prepared {
+  border-color: #4caf50;
+  background: #e8f5e9;
+}
+
+/* Spell name and headers */
+.spell-name {
+  font-weight: bold;
+  color: #333;
+}
+
+.spell-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+/* Spell descriptions */
+.spell-description {
+  margin-top: 8px;
+  color: #555;
+  line-height: 1.4;
+}
+
+.spell-description.hidden {
+  display: none;
+}
+
+.spell-description-container {
+  margin-top: 8px;
+}
+
+/* Buttons */
+.spell-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.prepare-btn, 
+.unprepare-btn, 
+.delete-btn, 
+.use-slot-btn, 
+.restore-slot-btn,
+.description-toggle {
+  padding: 4px 8px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.prepare-btn {
+  background: #4caf50;
+  color: white;
+}
+
+.prepare-btn:hover {
+  background: #388e3c;
+}
+
+.unprepare-btn {
+  background: #ff9800;
+  color: white;
+}
+
+.unprepare-btn:hover {
+  background: #f57c00;
+}
+
+.delete-btn {
+  background: #f44336;
+  color: white;
+}
+
+.delete-btn:hover {
+  background: #d32f2f;
+}
+
+.use-slot-btn {
+  background: #2196f3;
+  color: white;
+}
+
+.use-slot-btn:hover {
+  background: #1976d2;
+}
+
+.restore-slot-btn {
+  background: #9c27b0;
+  color: white;
+}
+
+.restore-slot-btn:hover {
+  background: #7b1fa2;
+}
+
+.description-toggle {
+  background: #607d8b;
+  color: white;
+}
+
+.description-toggle:hover {
+  background: #455a64;
+}
+
+/* Action buttons */
+.add-spell-btn {
+  margin: 15px 0;
+  padding: 8px 16px;
+  background: #2196f3;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.add-spell-btn:hover {
+  background: #1976d2;
+}
+
+.long-rest-btn {
+  margin: 15px 0;
+  padding: 8px 16px;
+  background: #9c27b0;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.long-rest-btn:hover {
+  background: #7b1fa2;
+}
+
+/* Add spell modal */
+.add-spell-modal {
+  position: fixed;
+  top: 20%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: white;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 0 10px rgba(0,0,0,0.3);
+  z-index: 1000;
+  width: 80%;
+  max-width: 500px;
+}
+
+.add-spell-modal form {
+  display: flex;
+  flex-direction: column;
+}
+
+.add-spell-modal input, 
+.add-spell-modal select, 
+.add-spell-modal textarea {
+  margin-bottom: 15px;
+  padding: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+.add-spell-modal textarea {
+  min-height: 100px;
+  resize: vertical;
+}
+
+.add-spell-modal button {
+  padding: 8px 16px;
+  margin-right: 8px;
+  margin-top: 10px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.add-spell-modal button[type="submit"] {
+  background: #4caf50;
+  color: white;
+}
+
+.cancel-btn {
+  background: #f44336;
+  color: white;
+}
+
+/* Spell slots section */
+.spell-slots-section {
+  margin: 15px 0;
+}
+
+.spell-slot {
+  display: flex;
+  align-items: center;
+  margin: 8px 0;
+  padding: 8px;
+  background: #e3f2fd;
+  border-radius: 4px;
+}
+
+.spell-slot span {
+  flex: 1;
+  margin-right: 10px;
+}
+
+/* Filter container */
+.filter-container {
+  margin: 15px 0;
+  padding: 10px;
+  background: #e8eaf6;
+  border-radius: 4px;
+}
+
+.filter-container select {
+  margin-left: 8px;
+  padding: 4px;
+  border-radius: 4px;
+  border: 1px solid #ccc;
+}
+
+/* Level sections */
+.spell-level-section {
+  margin: 20px 0;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed #ccc;
+}
+
+.spell-level-section h3 {
+  color: #303f9f;
+  margin-bottom: 10px;
+}
+
+/* Character info section */
+.character-info {
+  background: #e8f5e9;
+  padding: 10px;
+  border-radius: 4px;
+  margin-bottom: 15px;
+}
+
+/* General headers */
+h2 {
+  color: #1a237e;
+  border-bottom: 1px solid #e0e0e0;
+  padding-bottom: 8px;
+  margin-bottom: 15px;
+}
+/* Unknown Spells Container */
+.unknown-spells-container {
+  padding: 1em;
+  background-color: #f8f8f8;
+}
+
+/* Spell Card for Unknown Spells */
+.spell-card.unknown {
+  border: 1px solid #ccc;
+  background-color: #fff;
+  padding: 0.75em;
+  margin-bottom: 1em;
+  border-radius: 4px;
+}
+
+/* Spell Name Styling */
+.spell-card.unknown .spell-name {
+  font-size: 1.2em;
+  margin-bottom: 0.5em;
+}
+
+/* Spell Description Styling */
+.spell-card.unknown .spell-description {
+  font-size: 0.95em;
+  color: #555;
+  margin-bottom: 0.5em;
+}
+
+/* Learn Spell Button */
+.learn-spell-btn {
+  background-color: #4CAF50;
+  color: white;
+  border: none;
+  padding: 0.5em 1em;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.learn-spell-btn:hover {
+  background-color: #45a049;
+}
+
+/* Navigation Button (if needed) */
+.nav-btn {
+  background-color: #007acc;
+  color: white;
+  border: none;
+  padding: 0.5em 1em;
+  cursor: pointer;
+  margin-right: 5px;
+  border-radius: 3px;
+}
+
+.nav-btn:hover {
+  background-color: #005fa3;
+}
+
+/* Styles for the header inside unknown spell cards */
+.spell-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+/* Spell name styling */
+.spell-name {
+  font-size: 1.2em;
+  margin: 0;
+}
+
+/* Spell level styling */
+.spell-level {
+  font-size: 0.9em;
+  color: #777;
+  margin-left: 0.5em;
+}
+
+/* Learn Spell Button */
+.learn-spell-btn {
+  background-color: #4CAF50;
+  color: white;
+  border: none;
+  padding: 0.5em 1em;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.learn-spell-btn:hover {
+  background-color: #45a049;
+}
+
+/* Container for Unknown Spells */
+.unknown-spells-container {
+  padding: 1em;
+  background-color: #f8f8f8;
+}
+
+/* Navigation Buttons */
+.spellbook-nav-buttons {
+  margin-bottom: 1em;
+}
+
+/* Filter Container */
+.filter-container {
+  margin-bottom: 1em;
+}
+.filter-container label {
+  margin-right: 0.5em;
+  font-weight: bold;
+}
+
+/* Unknown Spell Group Section */
+.unknown-spell-group {
+  margin-bottom: 1em;
+  padding: 0.5em;
+  border: 1px solid #ddd;
+  background-color: #fff;
+  border-radius: 4px;
+}
+
+/* Spell Card for Unknown Spells */
+.spell-card.unknown {
+  border: 1px solid #ccc;
+  background-color: #fff;
+  padding: 0.75em;
+  margin-bottom: 0.75em;
+  border-radius: 4px;
+}
+
+/* Spell Header (Name & Level) */
+.spell-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.spell-name {
+  font-size: 1.2em;
+  margin: 0;
+}
+.spell-level {
+  font-size: 0.9em;
+  color: #777;
+}
+
+/* Spell Description */
+.spell-description {
+  font-size: 0.95em;
+  color: #555;
+  margin-top: 0.5em;
+}
+
+/* Learn Spell Button */
+.learn-spell-btn {
+  background-color: #4CAF50;
+  color: white;
+  border: none;
+  padding: 0.5em 1em;
+  cursor: pointer;
+  border-radius: 3px;
+  margin-top: 0.5em;
+}
+.learn-spell-btn:hover {
+  background-color: #45a049;
+}
+
+/* Navigation Button */
+.nav-btn {
+  background-color: #007acc;
+  color: white;
+  border: none;
+  padding: 0.5em 1em;
+  cursor: pointer;
+  margin-right: 5px;
+  border-radius: 3px;
+}
+.nav-btn:hover {
+  background-color: #005fa3;
+}
+.open-note-btn {
+  margin-top: 4px;
+  font-size: 0.9em;
+  background-color: var(--interactive-accent);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.search-container {
+  margin-bottom: 15px;
+  padding: 10px;
+  background-color: var(--background-secondary);
+  border-radius: 6px;
+  border: 1px solid var(--background-modifier-border);
+}
+
+.search-container label {
+  display: block;
+  margin-bottom: 5px;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.spell-search-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background-color: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 14px;
+  transition: border-color 0.2s ease;
+}
+
+.spell-search-input:focus {
+  outline: none;
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px var(--interactive-accent-hover);
+}
+
+.spell-search-input::placeholder {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.filter-container {
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  flex-wrap: wrap;
+}
+
+.filter-container label {
+  font-weight: 500;
+  color: var(--text-normal);
+  white-space: nowrap;
+}
+
+.filter-container select {
+  padding: 6px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background-color: var(--background-primary);
+  color: var(--text-normal);
+  min-width: 120px;
+}
+
+.filter-container select:focus {
+  outline: none;
+  border-color: var(--interactive-accent);
+}
+
+/* Melhorias para seções de nível */
+.spell-level-section h3,
+.prepared-level-section h4 {
+  color: var(--text-accent);
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding-bottom: 5px;
+  margin-bottom: 10px;
+}
+
+/* Mensagens de "nenhuma magia encontrada" */
+.no-spells-message {
+  text-align: center;
+  padding: 20px;
+  color: var(--text-muted);
+  font-style: italic;
+  background-color: var(--background-secondary);
+  border-radius: 6px;
+  margin: 10px 0;
+}
+
+/* Melhorar a aparência das spell cards */
+.spell-card.prepared {
+  border-left: 3px solid var(--interactive-accent);
+}
+
+.spell-card.unknown {
+  border-left: 3px solid var(--text-warning);
+}
+
+.spell-card {
+  margin-bottom: 10px;
+  padding: 15px;
+  background-color: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  transition: box-shadow 0.2s ease;
+}
+
+.spell-card:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* Spell header styling */
+.spell-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.spell-name {
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.spell-level {
+  font-size: 12px;
+  color: var(--text-muted);
+  background-color: var(--background-secondary);
+  padding: 2px 8px;
+  border-radius: 12px;
+}
+
+/* Button container */
+.spell-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.spell-buttons button {
+  padding: 6px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background-color: var(--background-primary);
+  color: var(--text-normal);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 12px;
+}
+
+.spell-buttons button:hover {
+  background-color: var(--background-secondary);
+}
+
+.prepare-btn, .learn-spell-btn {
+  background-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+}
+
+.prepare-btn:hover, .learn-spell-btn:hover {
+  background-color: var(--interactive-accent-hover);
+}
+
+.unprepare-btn, .delete-btn {
+  background-color: var(--background-modifier-error);
+  color: var(--text-on-accent);
+  border-color: var(--background-modifier-error);
+}
+
+.unprepare-btn:hover, .delete-btn:hover {
+  opacity: 0.8;
+}
+
+.cast-btn, .cast-spell-btn {
+  background-color: var(--text-success);
+  color: white;
+  border-color: var(--text-success);
+}
+
+.cast-btn:hover, .cast-spell-btn:hover {
+  opacity: 0.8;
+}
+
+/* Extra uses badge */
+.extra-uses-badge {
+  display: inline-block;
+  margin-left: 10px;
+}
+
+.extra-uses-badge span {
+  background-color: var(--text-warning);
+  color: white;
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: bold;
+}
+
+/* Description toggle */
+.description-toggle {
+  background: none;
+  border: none;
+  color: var(--text-accent);
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0;
+  margin-bottom: 5px;
+}
+
+.description-toggle:hover {
+  opacity: 0.8;
+}
+
+.spell-description.hidden {
+  display: none;
+}
+
+.spell-description {
+  margin: 10px 0;
+  padding: 10px;
+  background-color: var(--background-secondary);
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+/* Open note button */
+.open-note-btn {
+  background-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border: none;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  margin-top: 5px;
+}
+
+.open-note-btn:hover {
+  background-color: var(--interactive-accent-hover);
+}
+
+/* Spell status indicators */
+.spell-status {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-weight: bold;
+}
+
+.spell-status.prepared {
+  background-color: var(--text-success);
+  color: white;
+}
+
+.spell-status.unprepared {
+  background-color: var(--text-muted);
+  color: white;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .filter-container {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  
+  .filter-container select {
+    width: 100%;
+    min-width: auto;
+  }
+  
+  .spell-buttons {
+    flex-direction: column;
+  }
+  
+  .spell-buttons button {
+    width: 100%;
+  }
+  
+  .spell-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 5px;
+  }
+}/* Adicione este CSS ao seu arquivo de estilos ou dentro do método loadStyles() */
+
+.search-container {
+  margin-bottom: 15px;
+  padding: 10px;
+  background-color: var(--background-secondary);
+  border-radius: 6px;
+  border: 1px solid var(--background-modifier-border);
+}
+
+.search-container label {
+  display: block;
+  margin-bottom: 5px;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.spell-search-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background-color: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 14px;
+  transition: border-color 0.2s ease;
+}
+
+.spell-search-input:focus {
+  outline: none;
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px var(--interactive-accent-hover);
+}
+
+.spell-search-input::placeholder {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.filter-container {
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.filter-container label {
+  font-weight: 500;
+  color: var(--text-normal);
+  white-space: nowrap;
+}
+
+.filter-container select {
+  padding: 6px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background-color: var(--background-primary);
+  color: var(--text-normal);
+}
+
+.bonus-prepared-badge {
+  background: linear-gradient(135deg, #ffd700, #ffed4a);
+  border: 1px solid #f1c40f;
+  border-radius: 12px;
+  padding: 4px 8px;
+  margin: 4px 0;
+  display: inline-block;
+  font-size: 0.8em;
+}
+
+.bonus-badge-text {
+  color: #8b4513;
+  font-weight: bold;
+  text-shadow: 1px 1px 1px rgba(255,255,255,0.5);
+}
+
+/*
+
+This CSS file will be included with your plugin, and
+available in the app when your plugin is enabled.
+
+If your plugin does not need CSS, delete this file.
+
+*/
+/* RPG Inventory Plugin Styles */
+
+.rpg-inventory-coins,
+.inventory-coins,
+.shop-coins {
+    background-color: var(--background-secondary);
+    padding: 10px;
+    border-radius: 5px;
+    margin-bottom: 15px;
+    display: flex;
+    align-items: center;
+}
+
+.inventory-coins h3,
+.shop-coins h3 {
+    margin: 0;
+    color: gold;
+}
+
+.inventory-container,
+.shop-container,
+.rpg-inventory-list {
+    background-color: var(--background-primary-alt);
+    padding: 15px;
+    border-radius: 5px;
+    margin-bottom: 20px;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.inventory-container table,
+.shop-container table,
+.rpg-inventory-list table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.inventory-container th,
+.shop-container th,
+.rpg-inventory-list th {
+    text-align: left;
+    padding: 8px;
+    border-bottom: 1px solid var(--background-modifier-border);
+    color: var(--text-accent);
+}
+
+.inventory-container td,
+.shop-container td,
+.rpg-inventory-list td {
+    padding: 8px;
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.inventory-container button,
+.shop-container button {
+    margin-right: 5px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background-color: var(--interactive-normal);
+    color: var(--text-normal);
+    cursor: pointer;
+    border: none;
+}
+
+.inventory-container button:hover,
+.shop-container button:hover {
+    background-color: var(--interactive-hover);
+}
+
+button.mod-cta {
+    background-color: var(--interactive-accent);
+    color: var(--text-on-accent);
+    margin-right: 10px;
+}
+
+button.mod-cta:hover {
+    background-color: var(--interactive-accent-hover);
+}
+.rpg-inventory-folder-list {
+    margin-bottom: 15px;
+}
+
+.rpg-inventory-folder-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px 10px;
+    margin-bottom: 5px;
+    background-color: var(--background-secondary);
+    border-radius: 4px;
+}
+
+.rpg-inventory-new-folder {
+    display: flex;
+    margin-bottom: 20px;
+}
+
+.rpg-inventory-new-folder input {
+    flex-grow: 1;
+    margin-right: 10px;
+    padding: 5px;
+}
+/* Shop selection styling */
+.shop-selection-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 15px;
+    margin-bottom: 20px;
+}
+
+.shop-card {
+    background-color: var(--background-secondary);
+    border-radius: 5px;
+    padding: 15px;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.shop-card h3 {
+    margin-top: 0;
+    color: var(--text-accent);
+}
+
+.shop-card p {
+    flex-grow: 1;
+    margin-bottom: 15px;
+}
+
+.shop-description {
+    font-style: italic;
+    margin-bottom: 15px;
+    color: var(--text-muted);
+}
+
+.shop-buttons {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 20px;
+}
+
+.inventory-button {
+    margin-top: 15px;
+    width: 100%;
+}
+
+.button-disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Shop management styling */
+.rpg-inventory-shop-list {
+    margin-bottom: 15px;
+}
+
+.rpg-inventory-shop-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    margin-bottom: 8px;
+    background-color: var(--background-secondary);
+    border-radius: 4px;
+}
+
+.rpg-inventory-shop-info {
+    display: flex;
+    flex-direction: column;
+}
+
+.shop-name {
+    font-weight: bold;
+    margin-bottom: 4px;
+}
+
+.shop-path {
+    font-size: 0.85em;
+    color: var(--text-muted);
+}
+
+.rpg-inventory-new-shop {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 20px;
+}
+
+.rpg-inventory-new-shop input {
+    padding: 6px;
+}
+
+.rpg-inventory-new-shop button {
+    grid-column: span 2;
+    margin-top: 8px;
+}

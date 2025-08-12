@@ -2,6 +2,9 @@ import { App, Plugin, PluginSettingTab, Setting, TFile, MarkdownView, Notice, Mo
 import { Dice } from "./dice";
 import { ArmorClassModal } from "./ArmorClassModal";
 import { Lvl20ShopModal } from "./Lvl20ShopModal";
+import RPGInventoryPlugin from "./inventory";
+import DnDSpellbookPlugin from "./spellbook";
+
 
 
 
@@ -346,6 +349,9 @@ export default class RPGLevelsPlugin extends Plugin {
 	statusBarEl: HTMLElement;
 	linkCount: number = 0;
 	noteCount: number = 0;
+  inventory: RPGInventoryPlugin;
+  spellbook: DnDSpellbookPlugin;
+  
 	isInitializing: boolean = true; // Flag to track initialization state
 	
 	isEffectExpired(effect: EffectData): boolean {
@@ -552,6 +558,14 @@ export default class RPGLevelsPlugin extends Plugin {
 		// Add status bar item to show current level and XP
 		this.statusBarEl = this.addStatusBarItem();
 		this.updateStatusBar();
+
+    this.inventory = new RPGInventoryPlugin(this.app, this.manifest);
+    await this.inventory.onload();
+
+    this.spellbook = new DnDSpellbookPlugin(this.app, this.manifest);
+    await this.spellbook.onload();
+
+
 
 		this.addRibbonIcon("dice", "Show Character Stats", () => {
 			new StatsModal(this.app, this).open();

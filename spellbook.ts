@@ -2514,7 +2514,7 @@ async importSpellsFromNotes(): Promise<number> {
   }
 }
 class SpellbookSettingTab extends PluginSettingTab {
-  name = 'Spellbook Settings';
+  name = 'RPG Spellbook Settings';
 	plugin: DnDSpellbookPlugin;
 
 	constructor(app: App, plugin: DnDSpellbookPlugin) {

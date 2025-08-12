@@ -4896,6 +4896,7 @@ class ImageSuggestModal extends FuzzySuggestModal<TFile> {
 
 
 class RPGLevelsSettingTab extends PluginSettingTab {
+  name = 'RPG Level Settings';
 	plugin: RPGLevelsPlugin;
 	
 	constructor(app: App, plugin: RPGLevelsPlugin) {

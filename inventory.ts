@@ -778,7 +778,7 @@ class ShopModal extends Modal {
 }
 
 class RPGInventorySettingTab extends PluginSettingTab {
-    name = 'Inventory Settings';
+    name = 'RPG Inventory Settings';
     plugin: RPGInventoryPlugin;
 
     constructor(app: any, plugin: RPGInventoryPlugin) {

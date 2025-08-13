@@ -1,5 +1,5 @@
 
-// main.ts
+// inventory.ts
 
 import { Plugin, Notice, PluginSettingTab, Setting, Modal, MarkdownView, TFile, TFolder, CachedMetadata, MarkdownRenderer } from 'obsidian';
 

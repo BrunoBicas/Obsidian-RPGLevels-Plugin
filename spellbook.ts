@@ -1,3 +1,5 @@
+//spellbook.ts
+
 import { 
 	App, 
 	Plugin, 
@@ -7,7 +9,8 @@ import {
 	View,
   TFile, 
 	ItemView,
-  Notice
+  Notice,
+  parseYaml
 } from 'obsidian';
 
 const SPELLBOOK_VIEW_TYPE = 'dnd-spellbook-view';
@@ -1468,7 +1471,8 @@ export default class DnDSpellbookPlugin extends Plugin {
   async scanSpecificNoteForAllBonuses(file: TFile): Promise<{
     spellBonuses: SpellBonuses | null,
     preparedBonuses: BonusPreparedSpell[],
-    slotBonuses: SpellSlot[]
+    slotBonuses: SpellSlot[],
+    extraUses: ExtraSpellUse[]; // 🆕 adicionado
   }> {
     console.log(`🔍 Escaneando arquivo para TODOS os bônus: ${file.basename}`);
     
@@ -1480,7 +1484,7 @@ export default class DnDSpellbookPlugin extends Plugin {
       const yamlMatch = content.match(/^---\n([\s\S]*?)\n---/);
       if (!yamlMatch) {
         console.log("❌ Nenhum YAML frontmatter encontrado");
-        return { spellBonuses: null, preparedBonuses: [], slotBonuses: [] };
+        return { spellBonuses: null, preparedBonuses: [], slotBonuses: [],extraUses: [] };
       }
       
       const yamlContent = yamlMatch[1];
@@ -1489,7 +1493,8 @@ export default class DnDSpellbookPlugin extends Plugin {
       const result = {
         spellBonuses: null as SpellBonuses | null,
         preparedBonuses: [] as BonusPreparedSpell[],
-        slotBonuses: [] as SpellSlot[]
+        slotBonuses: [] as SpellSlot[],
+        extraUses: [] as ExtraSpellUse[]   // 🆕
       };
       
       // =====================================
@@ -1701,6 +1706,57 @@ export default class DnDSpellbookPlugin extends Plugin {
           }
         }
       }
+
+      const pushExtraUse = (name: string, uses: number) => {
+      const known = this.settings.knownSpells.find(s => s.name.toLowerCase() === name.toLowerCase());
+      if (!known || !uses || uses <= 0) return;
+      result.extraUses.push({
+        spellName: known.name,
+        uses,
+        usesRemaining: uses,
+        source: file.basename
+      });
+    };
+
+    // A) Objeto { Spell: N }
+    const freeObj = yamlContent.match(/(?:free|extra)[_-]?spell[_-]?uses?\s*:\s*\{([^}]+)\}/i);
+    if (freeObj) {
+      const body = freeObj[1];
+      const pairRx = /"([^"]+)"\s*:\s*(\d+)|'([^']+)'\s*:\s*(\d+)|([^:,{}]+)\s*:\s*(\d+)/g;
+      for (const m of body.matchAll(pairRx)) {
+        const name = (m[1] ?? m[3] ?? m[5] ?? '').trim();
+        const uses = parseInt(m[2] ?? m[4] ?? m[6] ?? '0', 10);
+        pushExtraUse(name, uses);
+      }
+    }
+
+    // B) Array [{ spell: X, uses: N }]
+    const freeArr = yamlContent.match(/(?:free|extra)[_-]?spell[_-]?uses?\s*:\s*\[([^\]]+)\]/i);
+    if (freeArr) {
+      const body = freeArr[1];
+      const itemRx = /\{\s*spell\s*:\s*["']?([^,"'}\n]+)["']?\s*,\s*uses?\s*:\s*(\d+)\s*\}/gi;
+      for (const m of body.matchAll(itemRx)) pushExtraUse(m[1].trim(), parseInt(m[2], 10));
+    }
+
+    // C/D) Bloco com "-" (inclui a linha aspas-única)
+    const freeBlock = yamlContent.match(/(?:free|extra)[_-]?spell[_-]?uses?\s*:\s*([\s\S]*?)(?:\n[^ \t-][^\n]*:\s*|$)/i);
+    if (freeBlock) {
+      const block = freeBlock[1];
+      // C) - spell: X \n   uses: N   OU  - spell: X, uses: N
+      const listRx = /-\s*spell\s*:\s*["']?([^,"'\n]+)["']?\s*(?:,|\s*\n\s*)uses?\s*:\s*(\d+)/gi;
+      for (const m of block.matchAll(listRx)) pushExtraUse(m[1].trim(), parseInt(m[2], 10));
+
+      // D) - "spell: \"X\", uses: N"
+      const quotedLineRx = /-\s*["']\s*spell\s*:\s*["']?([^"']+)["']\s*,\s*uses\s*:\s*(\d+)\s*["']/gi;
+      for (const m of block.matchAll(quotedLineRx)) pushExtraUse(m[1].trim(), parseInt(m[2], 10));
+    }
+
+    // Se coletou usos, substitui os antigos dessa mesma fonte, pra não duplicar
+    if (result.extraUses.length > 0) {
+      this.settings.extraSpellUses = (this.settings.extraSpellUses || []).filter(u => u.source !== file.basename);
+      this.settings.extraSpellUses.push(...result.extraUses);
+    }
+
       
       await this.saveSettings();
       
@@ -1713,7 +1769,7 @@ export default class DnDSpellbookPlugin extends Plugin {
       
     } catch (error) {
       console.error(`❌ Erro lendo arquivo ${file.path}:`, error);
-      return { spellBonuses: null, preparedBonuses: [], slotBonuses: [] };
+      return { spellBonuses: null, preparedBonuses: [], slotBonuses: [], extraUses: []  };
     }
   }
 

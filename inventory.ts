@@ -119,6 +119,16 @@ export default class RPGInventoryPlugin extends Plugin {
 
         // Load settings
         this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+
+        if (this.settings.itemFolderPath) {
+            const set = new Set(this.settings.itemFolderPaths || []);
+            const p = this.settings.itemFolderPath.endsWith('/')
+                ? this.settings.itemFolderPath
+                : this.settings.itemFolderPath + '/';
+            set.add(p);
+            this.settings.itemFolderPaths = Array.from(set);
+            await this.saveSettings();
+        }
     
         // Check for auto-restock
         await this.checkAndAutoRestock();
@@ -231,9 +241,9 @@ export default class RPGInventoryPlugin extends Plugin {
                 const lootFiles = this.app.vault.getMarkdownFiles().filter(file => {
                     // If no specific path is given, use any folder with items
                     if (!lootPath) {
-                        return this.settings.itemFolderPaths.some(path => 
+                        return this.getItemFolders().some(path =>
                             file.path.startsWith(path));
-                    }
+                        }
                     // Otherwise use the specified path
                     return file.path.startsWith(lootPath);
                 });
@@ -320,6 +330,13 @@ export default class RPGInventoryPlugin extends Plugin {
 
     async saveSettings(): Promise<void> {
         await this.saveData(this.settings);
+    }
+
+    getItemFolders(): string[] {
+        const set = new Set(this.settings.itemFolderPaths || []);
+        const p = (this.settings.itemFolderPath || '').trim();
+        if (p) set.add(p.endsWith('/') ? p : p + '/');
+        return Array.from(set);
     }
 
     async checkAndAutoRestock(): Promise<void> {
@@ -829,6 +846,29 @@ class RPGInventorySettingTab extends PluginSettingTab {
                 this.display(); // Refresh settings panel
             }
         });
+
+        new Setting(containerEl)
+            .setName('Items Folder Path')
+            .setDesc('Folder path where your item notes are stored (e.g., "Items/" or "RPG/Items/")')
+            .addText(text => text
+                .setPlaceholder('Items/')
+                .setValue(this.plugin.settings.itemFolderPath)
+                .onChange(async (value) => {
+                    const v = value.trim();
+                    this.plugin.settings.itemFolderPath = v;
+
+                    if (!Array.isArray(this.plugin.settings.itemFolderPaths)) {
+                        this.plugin.settings.itemFolderPaths = [];
+                    }
+                    const normalized = v && !v.endsWith('/') ? v + '/' : v;
+                    if (normalized) {
+                        const set = new Set(this.plugin.settings.itemFolderPaths);
+                        set.add(normalized);
+                        this.plugin.settings.itemFolderPaths = Array.from(set);
+                    }
+                    await this.plugin.saveSettings();
+                }));
+
         containerEl.createEl('h3', { text: 'Normal Shop Management' });
     
         // List existing shops
@@ -888,16 +928,6 @@ class RPGInventorySettingTab extends PluginSettingTab {
             }
         });
 
-        new Setting(containerEl)
-            .setName('Items Folder Path')
-            .setDesc('Folder path where your item notes are stored (e.g., "Items/" or "RPG/Items/")')
-            .addText(text => text
-                .setPlaceholder('Items/')
-                .setValue(this.plugin.settings.itemFolderPath)
-                .onChange(async (value) => {
-                    this.plugin.settings.itemFolderPath = value;
-                    await this.plugin.saveSettings();
-                }));
         
         new Setting(containerEl)
             .setName('Reset Coins')
@@ -1205,8 +1235,8 @@ class CustomShopCreatorModal extends Modal {
         // Get all markdown files from item folders
         this.allItems = [];
         
-        for (const folderPath of this.plugin.settings.itemFolderPaths) {
-            const itemFiles = this.app.vault.getMarkdownFiles().filter((file: TFile) => 
+        for (const folderPath of this.plugin.getItemFolders()) {
+            const itemFiles = this.app.vault.getMarkdownFiles().filter((file: TFile) =>
                 file.path.startsWith(folderPath));
                 
             for (const file of itemFiles) {

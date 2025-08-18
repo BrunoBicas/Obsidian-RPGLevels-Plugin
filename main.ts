@@ -1011,6 +1011,10 @@ async applyAllPassiveEffects() {
     this.settings.vision = { senses: {} }; 
     this.settings.obtainedClassFeats = []; // IMPORTANT: Reset granted feats before recalculating
     this.settings.unlockedEffects = [];
+    this.settings.armorClass.base = 10; 
+    this.settings.armorClass.modifierAbility = "Dexterity";
+    this.settings.armorClass.bonus = 0;
+    this.settings.armorClass.sources = [];
 
     const sourceNotesForBonuses: string[] = [
     ...this.settings.obtainedFeats,

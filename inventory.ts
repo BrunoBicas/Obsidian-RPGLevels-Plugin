@@ -350,15 +350,48 @@ export default class RPGInventoryPlugin extends Plugin {
     }
 
     async restockShops(): Promise<void> {
-        // Get all item files
+        // Get all item files from regular shops
         const itemFiles = this.app.vault.getMarkdownFiles().filter(file => {
             // Check if file is in any shop folder
             return this.settings.shops.some(shop => 
                 file.path.startsWith(shop.folderPath));
         });
         
+        // NOVO: Get all item files from custom shops
+        const customShopFiles = new Set<string>();
+        if (this.settings.customShops && Array.isArray(this.settings.customShops)) {
+            this.settings.customShops.forEach(customShop => {
+                // Add fixed items
+                if (Array.isArray(customShop.fixedItems)) {
+                    customShop.fixedItems.forEach(itemPath => {
+                        customShopFiles.add(itemPath);
+                    });
+                }
+                
+                // Add items from random pools
+                if (Array.isArray(customShop.randomPools)) {
+                    customShop.randomPools.forEach(pool => {
+                        if (Array.isArray(pool.items)) {
+                            pool.items.forEach(itemPath => {
+                                customShopFiles.add(itemPath);
+                            });
+                        }
+                    });
+                }
+            });
+        }
+        
+        // Combine regular shop files with custom shop files
+        const allShopFiles = [...itemFiles];
+        customShopFiles.forEach(filePath => {
+            const file = this.app.vault.getAbstractFileByPath(filePath) as TFile;
+            if (file && !allShopFiles.some(f => f.path === file.path)) {
+                allShopFiles.push(file);
+            }
+        });
+        
         // For each item, get its base price from metadata or content
-        for (const file of itemFiles) {
+        for (const file of allShopFiles) {
             // Restock quantity (1-10)
             this.settings.shopStock[file.path] = Math.floor(Math.random() * 10) + 1;
             

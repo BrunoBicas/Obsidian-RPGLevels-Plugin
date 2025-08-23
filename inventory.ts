@@ -942,7 +942,7 @@ class RPGInventorySettingTab extends PluginSettingTab {
         containerEl.createEl('h2', { text: 'RPG Inventory Settings' });
         containerEl.createEl('h3', { text: 'Item Folders' });
 
-        // Shop management section
+        // Shop management section (mantido igual)
         containerEl.createEl('h3', { text: 'Custom Shop Management' });
         
         // Display current folders with delete buttons
@@ -1002,7 +1002,7 @@ class RPGInventorySettingTab extends PluginSettingTab {
                 }));
 
         containerEl.createEl('h3', { text: 'Normal Shop Management' });
-    
+
         // List existing shops
         const shopList = containerEl.createEl('div', { cls: 'rpg-inventory-shop-list' });
 
@@ -1135,112 +1135,395 @@ class RPGInventorySettingTab extends PluginSettingTab {
                     this.display();
                 }));
 
-        // Custom Shop Creation
-        containerEl.createEl('h3', { text: 'Custom Shop Creator' });
-        const customShopDiv = containerEl.createEl('div', { cls: 'rpg-inventory-custom-shop' });
+        // ===== CUSTOM SHOPS SECTION - OTIMIZADA =====
+        this.createOptimizedCustomShopSection(containerEl);
 
-        const customShopButton = customShopDiv.createEl('button', { 
-            text: 'Create Custom Shop', 
-            cls: 'mod-cta' 
-        });
-        customShopButton.addEventListener('click', () => {
-            new CustomShopCreatorModal(this.app, this.plugin).open();
-        });
+        // ===== CUSTOM TREASURES SECTION - OTIMIZADA =====
+        this.createOptimizedCustomTreasureSection(containerEl);
+    }
 
-        // Display existing custom shops
-        if (this.plugin.settings.customShops && this.plugin.settings.customShops.length > 0) {
-            const customShopList = containerEl.createEl('div', { cls: 'rpg-inventory-custom-shop-list' });
-    
-            this.plugin.settings.customShops.forEach((shop, index) => {
-                const shopDiv = customShopList.createEl('div', { cls: 'rpg-inventory-shop-item' });
-                
-                const shopInfo = shopDiv.createEl('div', { cls: 'rpg-inventory-shop-info' });
-                shopInfo.createEl('span', { text: shop.name, cls: 'shop-name' });
-                const fixedCount = Array.isArray(shop.fixedItems) ? shop.fixedItems.length : 0;
-                const poolCount = Array.isArray(shop.randomPools) ? shop.randomPools.length : 0;
-
-                shopInfo.createEl('span', {
-                    text: `Fixed Items: ${fixedCount}, Random Pools: ${poolCount}`,
-                    cls: 'shop-details'
-                });
-                
-                const deleteButton = shopDiv.createEl('button', { text: 'Remove' });
-                deleteButton.addEventListener('click', async () => {
-                    this.plugin.settings.customShops.splice(index, 1);
-                    await this.plugin.saveSettings();
-                    this.display(); // Refresh settings panel
-                });
-
-                const editButton = shopDiv.createEl('button', { text: 'Edit' });
-                editButton.addEventListener('click', async () => {
-                    const editModal = new CustomShopCreatorModal(this.app, this.plugin);
-                    editModal.customShop = JSON.parse(JSON.stringify(shop)); // Copy the shop
-                    editModal.open();
+    // Método otimizado para Custom Shops com lazy loading
+    private createOptimizedCustomShopSection(containerEl: HTMLElement): void {
+        const customShopSection = containerEl.createEl('div', { cls: 'rpg-custom-section' });
+        
+        // Header colapsável
+        const customShopHeader = customShopSection.createEl('div', { cls: 'rpg-collapsible-header' });
+        customShopHeader.createEl('h3', { text: '🏪 Custom Shops' });
+        
+        const toggleIcon = customShopHeader.createEl('span', { text: '▶', cls: 'rpg-toggle-icon' });
+        
+        // Conteúdo colapsável (inicialmente oculto)
+        const customShopContent = customShopSection.createEl('div', { cls: 'rpg-collapsible-content' });
+        // CORREÇÃO: Aplicar style depois da criação
+        customShopContent.style.display = 'none';
+        
+        let isLoaded = false;
+        let isCustomShopCollapsed = true;
+        
+        // Toggle functionality com lazy loading
+        customShopHeader.addEventListener('click', () => {
+            isCustomShopCollapsed = !isCustomShopCollapsed;
             
-                    // When saving, replace the old one
-                    const originalSave = editModal.saveCustomShop;
-                    editModal.saveCustomShop = async () => {
-                        this.plugin.settings.customShops[index] = editModal.customShop;
-                        await this.plugin.saveSettings();
-                        this.display(); // Update the list
-                        editModal.close();
-                    };
-                });
-            });
-        // Custom Treasure Creation
-        containerEl.createEl('h3', { text: 'Custom Treasure Creator' });
-        const customTreasureDiv = containerEl.createEl('div', { cls: 'rpg-inventory-custom-treasure' });
-
-        const customTreasureButton = customTreasureDiv.createEl('button', { 
-            text: 'Create Custom Treasure', 
-            cls: 'mod-cta' 
-        });
-        customTreasureButton.addEventListener('click', () => {
-            new CustomTreasureCreatorModal(this.app, this.plugin).open();
-        });
-
-        // Display existing custom treasures
-        if (this.plugin.settings.customTreasures && this.plugin.settings.customTreasures.length > 0) {
-            const customTreasureList = containerEl.createEl('div', { cls: 'rpg-inventory-custom-treasure-list' });
-    
-            this.plugin.settings.customTreasures.forEach((treasure, index) => {
-                const treasureDiv = customTreasureList.createEl('div', { cls: 'rpg-inventory-treasure-item' });
+            if (isCustomShopCollapsed) {
+                customShopContent.style.display = 'none';
+                toggleIcon.textContent = '▶';
+            } else {
+                customShopContent.style.display = 'block';
+                toggleIcon.textContent = '▼';
                 
-                const treasureInfo = treasureDiv.createEl('div', { cls: 'rpg-inventory-treasure-info' });
-                treasureInfo.createEl('span', { text: treasure.name, cls: 'treasure-name' });
-                const fixedCount = Array.isArray(treasure.fixedItems) ? treasure.fixedItems.length : 0;
-                const poolCount = Array.isArray(treasure.randomPools) ? treasure.randomPools.length : 0;
+                // Lazy loading - só carrega o conteúdo quando expandido pela primeira vez
+                if (!isLoaded) {
+                    this.loadCustomShopContent(customShopContent);
+                    isLoaded = true;
+                }
+            }
+        });
+    }
 
-                treasureInfo.createEl('span', {
-                    text: `Fixed Items: ${fixedCount}, Random Pools: ${poolCount}, Chance: ${treasure.chancePercent}%`,
-                    cls: 'treasure-details'
-                });
-                
-                const deleteButton = treasureDiv.createEl('button', { text: 'Remove' });
-                deleteButton.addEventListener('click', async () => {
-                    this.plugin.settings.customTreasures.splice(index, 1);
-                    await this.plugin.saveSettings();
-                    this.display(); // Refresh settings panel
-                });
-
-                const editButton = treasureDiv.createEl('button', { text: 'Edit' });
-                editButton.addEventListener('click', async () => {
-                    const editModal = new CustomTreasureCreatorModal(this.app, this.plugin);
-                    editModal.customTreasure = JSON.parse(JSON.stringify(treasure)); // Copy the treasure
-                    editModal.open();
+    // Método otimizado para Custom Treasures (similar ao shops) - CORRIGIDO
+    private createOptimizedCustomTreasureSection(containerEl: HTMLElement): void {
+        const customTreasureSection = containerEl.createEl('div', { cls: 'rpg-custom-section' });
+        
+        const customTreasureHeader = customTreasureSection.createEl('div', { cls: 'rpg-collapsible-header' });
+        customTreasureHeader.createEl('h3', { text: '💎 Custom Treasures' });
+        
+        const toggleIcon = customTreasureHeader.createEl('span', { text: '▶', cls: 'rpg-toggle-icon' });
+        
+        const customTreasureContent = customTreasureSection.createEl('div', { cls: 'rpg-collapsible-content' });
+        // CORREÇÃO: Aplicar style depois da criação
+        customTreasureContent.style.display = 'none';
+        
+        let isLoaded = false;
+        let isCustomTreasureCollapsed = true;
+        
+        customTreasureHeader.addEventListener('click', () => {
+            isCustomTreasureCollapsed = !isCustomTreasureCollapsed;
             
-                    // When saving, replace the old one
-                    const originalSave = editModal.saveCustomTreasure;
-                    editModal.saveCustomTreasure = async () => {
-                        this.plugin.settings.customTreasures[index] = editModal.customTreasure;
-                        await this.plugin.saveSettings();
-                        this.display(); // Update the list
-                        editModal.close();
-                    };
-                });
+            if (isCustomTreasureCollapsed) {
+                customTreasureContent.style.display = 'none';
+                toggleIcon.textContent = '▶';
+            } else {
+                customTreasureContent.style.display = 'block';
+                toggleIcon.textContent = '▼';
+                
+                if (!isLoaded) {
+                    this.loadCustomTreasureContent(customTreasureContent);
+                    isLoaded = true;
+                }
+            }
+        });
+    }
+
+    // Métodos auxiliares também corrigidos
+    private loadCustomShopContent(container: HTMLElement): void {
+        const loadingDiv = container.createEl('div', { text: '⏳ Loading custom shops...', cls: 'rpg-loading' });
+        
+        // Usar requestAnimationFrame para não bloquear a UI
+        requestAnimationFrame(() => {
+            // Remove loading indicator
+            loadingDiv.remove();
+            
+            // Botão para criar nova custom shop
+            const createShopDiv = container.createEl('div', { cls: 'rpg-create-section' });
+            const customShopButton = createShopDiv.createEl('button', { 
+                text: '➕ Create New Custom Shop', 
+                cls: 'mod-cta rpg-create-button'
             });
+            customShopButton.addEventListener('click', () => {
+                new CustomShopCreatorModal(this.app, this.plugin).open();
+            });
+
+            // Lista de custom shops existentes
+            if (this.plugin.settings.customShops && this.plugin.settings.customShops.length > 0) {
+                // Criar lista com paginação se houver muitos items
+                this.createPaginatedShopList(container);
+            } else {
+                container.createEl('p', { 
+                    text: 'No custom shops created yet. Click "Create New Custom Shop" to get started!',
+                    cls: 'rpg-empty-message'
+                });
+            }
+        });
+    }
+
+    private loadCustomTreasureContent(container: HTMLElement): void {
+        const loadingDiv = container.createEl('div', { 
+            text: '⏳ Loading custom treasures...',
+            cls: 'rpg-loading'
+        });
+        
+        requestAnimationFrame(() => {
+            loadingDiv.remove();
+            
+            const createTreasureDiv = container.createEl('div', { cls: 'rpg-create-section' });
+            const customTreasureButton = createTreasureDiv.createEl('button', { 
+                text: '➕ Create New Custom Treasure', 
+                cls: 'mod-cta rpg-create-button'
+            });
+            customTreasureButton.addEventListener('click', () => {
+                new CustomTreasureCreatorModal(this.app, this.plugin).open();
+            });
+
+            if (this.plugin.settings.customTreasures && this.plugin.settings.customTreasures.length > 0) {
+                this.createPaginatedTreasureList(container);
+            } else {
+                container.createEl('p', { 
+                    text: 'No custom treasures created yet.',
+                    cls: 'rpg-empty-message'
+                });
+            }
+        });
+    }
+
+    // Lista paginada para performance com muitos shops
+    private createPaginatedShopList(container: HTMLElement): void {
+        const shopsPerPage = 10; // Mostrar máximo 10 shops por vez
+        const shops = this.plugin.settings.customShops;
+        let currentPage = 0;
+        
+        const listContainer = container.createEl('div', { cls: 'rpg-items-list' });
+        const paginationContainer = container.createEl('div', { cls: 'rpg-pagination' });
+        
+        const renderPage = (page: number) => {
+            listContainer.empty();
+            
+            const start = page * shopsPerPage;
+            const end = Math.min(start + shopsPerPage, shops.length);
+            
+            // Render apenas os shops da página atual
+            for (let i = start; i < end; i++) {
+                const shop = shops[i];
+                this.createShopCard(listContainer, shop, i);
+            }
+            
+            // Adicionar classe para listas grandes se necessário
+            if (shops.length > 20) {
+                listContainer.addClass('rpg-compact-mode');
+            }
+        };
+        
+        const renderPagination = () => {
+            paginationContainer.empty();
+            
+            const totalPages = Math.ceil(shops.length / shopsPerPage);
+            
+            if (totalPages <= 1) return;
+            
+            // Previous button
+            const prevBtn = paginationContainer.createEl('button', { 
+                text: '← Previous',
+                cls: 'rpg-page-btn'
+            });
+            prevBtn.disabled = currentPage === 0;
+            prevBtn.addEventListener('click', () => {
+                if (currentPage > 0) {
+                    currentPage--;
+                    renderPage(currentPage);
+                    renderPagination();
+                }
+            });
+            
+            // Page info
+            paginationContainer.createEl('span', { 
+                text: `Page ${currentPage + 1} of ${totalPages} (${shops.length} total)`,
+                cls: 'rpg-page-info'
+            });
+            
+            // Next button
+            const nextBtn = paginationContainer.createEl('button', { 
+                text: 'Next →',
+                cls: 'rpg-page-btn'
+            });
+            nextBtn.disabled = currentPage >= totalPages - 1;
+            nextBtn.addEventListener('click', () => {
+                if (currentPage < totalPages - 1) {
+                    currentPage++;
+                    renderPage(currentPage);
+                    renderPagination();
+                }
+            });
+        };
+        
+        // Render inicial
+        renderPage(0);
+        renderPagination();
+    }
+
+    private createPaginatedTreasureList(container: HTMLElement): void {
+        // Similar ao createPaginatedShopList, mas para treasures
+        const treasuresPerPage = 10;
+        const treasures = this.plugin.settings.customTreasures;
+        let currentPage = 0;
+        
+        const listContainer = container.createEl('div', { cls: 'rpg-items-list' });
+        const paginationContainer = container.createEl('div', { cls: 'rpg-pagination' });
+        
+        const renderPage = (page: number) => {
+            listContainer.empty();
+            
+            const start = page * treasuresPerPage;
+            const end = Math.min(start + treasuresPerPage, treasures.length);
+            
+            for (let i = start; i < end; i++) {
+                const treasure = treasures[i];
+                this.createTreasureCard(listContainer, treasure, i);
+            }
+            
+            if (treasures.length > 20) {
+                listContainer.addClass('rpg-compact-mode');
+            }
+        };
+        
+        const renderPagination = () => {
+            paginationContainer.empty();
+            
+            const totalPages = Math.ceil(treasures.length / treasuresPerPage);
+            
+            if (totalPages <= 1) return;
+            
+            const prevBtn = paginationContainer.createEl('button', { 
+                text: '← Previous',
+                cls: 'rpg-page-btn'
+            });
+            prevBtn.disabled = currentPage === 0;
+            prevBtn.addEventListener('click', () => {
+                if (currentPage > 0) {
+                    currentPage--;
+                    renderPage(currentPage);
+                    renderPagination();
+                }
+            });
+            
+            paginationContainer.createEl('span', { 
+                text: `Page ${currentPage + 1} of ${totalPages} (${treasures.length} total)`,
+                cls: 'rpg-page-info'
+            });
+            
+            const nextBtn = paginationContainer.createEl('button', { 
+                text: 'Next →',
+                cls: 'rpg-page-btn'
+            });
+            nextBtn.disabled = currentPage >= totalPages - 1;
+            nextBtn.addEventListener('click', () => {
+                if (currentPage < totalPages - 1) {
+                    currentPage++;
+                    renderPage(currentPage);
+                    renderPagination();
+                }
+            });
+        };
+        
+        renderPage(0);
+        renderPagination();
+    }
+
+    // Método otimizado para criar card de shop - CORRIGIDO
+    private createShopCard(container: HTMLElement, shop: any, index: number): void {
+        const shopCard = container.createEl('div', { cls: 'rpg-item-card' });
+        
+        // Header do card
+        const shopHeader = shopCard.createEl('div', { cls: 'rpg-card-header' });
+        shopHeader.createEl('h4', { text: `🏪 ${shop.name}`, cls: 'rpg-card-title' });
+        
+        // Info do shop
+        const shopInfo = shopCard.createEl('div', { cls: 'rpg-card-info' });
+        shopInfo.createEl('p', { text: shop.description, cls: 'rpg-description' });
+        
+        const fixedCount = Array.isArray(shop.fixedItems) ? shop.fixedItems.length : 0;
+        const poolCount = Array.isArray(shop.randomPools) ? shop.randomPools.length : 0;
+        
+        const statsDiv = shopInfo.createEl('div', { cls: 'rpg-stats' });
+        statsDiv.createEl('span', { text: `Fixed: ${fixedCount}`, cls: 'rpg-stat' });
+        statsDiv.createEl('span', { text: `Pools: ${poolCount}`, cls: 'rpg-stat' });
+        statsDiv.createEl('span', { text: `Max: ${shop.maxRandomItems}`, cls: 'rpg-stat' });
+        
+        // Botões de ação
+        const actionDiv = shopCard.createEl('div', { cls: 'rpg-card-actions' });
+        
+        const editButton = actionDiv.createEl('button', { text: '✏️ Edit', cls: 'rpg-edit-btn' });
+        editButton.addEventListener('click', () => {
+            this.editCustomShop(shop, index);
+        });
+        
+        const deleteButton = actionDiv.createEl('button', { text: '🗑️', cls: 'rpg-delete-btn' });
+        deleteButton.addEventListener('click', () => {
+            this.deleteCustomShop(shop, index);
+        });
+    }
+
+    private createTreasureCard(container: HTMLElement, treasure: any, index: number): void {
+        const treasureCard = container.createEl('div', { cls: 'rpg-item-card' });
+        
+        const treasureHeader = treasureCard.createEl('div', { cls: 'rpg-card-header' });
+        treasureHeader.createEl('h4', { text: `💎 ${treasure.name}`, cls: 'rpg-card-title' });
+        
+        const treasureInfo = treasureCard.createEl('div', { cls: 'rpg-card-info' });
+        treasureInfo.createEl('p', { text: treasure.description, cls: 'rpg-description' });
+        
+        const fixedCount = Array.isArray(treasure.fixedItems) ? treasure.fixedItems.length : 0;
+        const poolCount = Array.isArray(treasure.randomPools) ? treasure.randomPools.length : 0;
+        
+        const statsDiv = treasureInfo.createEl('div', { cls: 'rpg-stats' });
+        statsDiv.createEl('span', { text: `Fixed: ${fixedCount}`, cls: 'rpg-stat' });
+        statsDiv.createEl('span', { text: `Pools: ${poolCount}`, cls: 'rpg-stat' });
+        statsDiv.createEl('span', { text: `${treasure.chancePercent}%`, cls: 'rpg-stat' });
+        
+        const actionDiv = treasureCard.createEl('div', { cls: 'rpg-card-actions' });
+        
+        const editButton = actionDiv.createEl('button', { text: '✏️ Edit', cls: 'rpg-edit-btn' });
+        editButton.addEventListener('click', () => {
+            this.editCustomTreasure(treasure, index);
+        });
+        
+        const deleteButton = actionDiv.createEl('button', { text: '🗑️', cls: 'rpg-delete-btn' });
+        deleteButton.addEventListener('click', () => {
+            this.deleteCustomTreasure(treasure, index);
+        });
+    }
+
+    // Métodos auxiliares para ações (mantidos iguais)
+    private async editCustomShop(shop: any, index: number): Promise<void> {
+        const editModal = new CustomShopCreatorModal(this.app, this.plugin);
+        editModal.customShop = JSON.parse(JSON.stringify(shop));
+        editModal.open();
+
+        const originalSave = editModal.saveCustomShop;
+        editModal.saveCustomShop = async () => {
+            this.plugin.settings.customShops[index] = editModal.customShop;
+            await this.plugin.saveSettings();
+            this.display();
+            editModal.close();
+        };
+    }
+
+    private async deleteCustomShop(shop: any, index: number): Promise<void> {
+        if (confirm(`Delete "${shop.name}"?`)) {
+            this.plugin.settings.customShops.splice(index, 1);
+            await this.plugin.saveSettings();
+            this.display();
         }
-        }    
+    }
+
+    private async editCustomTreasure(treasure: any, index: number): Promise<void> {
+        const editModal = new CustomTreasureCreatorModal(this.app, this.plugin);
+        editModal.customTreasure = JSON.parse(JSON.stringify(treasure));
+        editModal.open();
+
+        const originalSave = editModal.saveCustomTreasure;
+        editModal.saveCustomTreasure = async () => {
+            this.plugin.settings.customTreasures[index] = editModal.customTreasure;
+            await this.plugin.saveSettings();
+            this.display();
+            editModal.close();
+        };
+    }
+
+    private async deleteCustomTreasure(treasure: any, index: number): Promise<void> {
+        if (confirm(`Delete "${treasure.name}"?`)) {
+            this.plugin.settings.customTreasures.splice(index, 1);
+            await this.plugin.saveSettings();
+            this.display();
+        }
     }
 }
 

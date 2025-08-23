@@ -37,6 +37,19 @@ interface CustomShop {
     maxRandomItems: number;
 }
 
+interface CustomTreasure {
+    name: string;
+    description: string;
+    fixedItems: string[];
+    randomPools: RandomPool[];
+    randomChance: number;
+    maxRandomItems: number;
+    minRandomItems: number;
+    minItems: number;
+    maxItems: number;
+    chancePercent: number;
+}
+
 interface ShopItem {
     name: string;
     file: TFile;
@@ -57,7 +70,7 @@ interface AllItemsEntry {
 interface RPGInventorySettings {
     coins: number;
     inventory: InventoryItem[];
-    customTreasures: any[];
+    customTreasures: CustomTreasure[];
     customShops: CustomShop[];
     itemFolderPaths: string[];
     shops: Shop[];
@@ -230,97 +243,31 @@ export default class RPGInventoryPlugin extends Plugin {
         
             // Add event listener to the loot button
             lootButton.addEventListener('click', async () => {
-                // First, check if there's a chance of finding nothing
-                const rollChance = Math.random() * 100;
-                if (rollChance > chancePercent) {
-                    new Notice("You found nothing this time!");
-                    return;
-                }
-        
-                // Get all potential loot items from the specified folder
-                const lootFiles = this.app.vault.getMarkdownFiles().filter(file => {
-                    // If no specific path is given, use any folder with items
-                    if (!lootPath) {
-                        return this.getItemFolders().some(path =>
-                            file.path.startsWith(path));
-                        }
-                    // Otherwise use the specified path
-                    return file.path.startsWith(lootPath);
-                });
-        
-                if (lootFiles.length === 0) {
-                    new Notice(`No loot items found in ${lootPath || 'any item folders'}!`);
-                    return;
-                }
-        
-                // Determine how many items to give
-                const numItems = Math.floor(Math.random() * (maxItems - minItems + 1)) + minItems;
+                // Check if this is a custom treasure
+                const customTreasure = this.settings.customTreasures?.find(t => t.name === lootPath);
                 
-                // Select random items (may include duplicates)
-                const foundItems: InventoryItem[] = [];
-                for (let i = 0; i < numItems; i++) {
-                    const randomIndex = Math.floor(Math.random() * lootFiles.length);
-                    const lootFile = lootFiles[randomIndex];
-                    
-                    try {
-                        // Get file metadata for item properties
-                        const metadata = this.app.metadataCache.getFileCache(lootFile);
-                        const content = await this.app.vault.read(lootFile);
-                        
-                        // Try to parse properties from file
-                        const priceMatch = content.match(/\((\d+)\s+#price\)/);
-                        const descMatch = content.match(/\(([^)]+)\s+#description\)/);
-                        const consumableMatch = content.match(/(\d+)\/(\d+)\s+#consumable/);
-                        const isConsumable = content.includes("#consumable");
-                        
-                        // Create the item object
-                        const item: InventoryItem = {
-                            name: lootFile.basename,
-                            file: lootFile.path,
-                            quantity: 1,
-                            price: (metadata?.frontmatter?.price) || 
-                                   (priceMatch ? parseInt(priceMatch[1]) : Math.floor(Math.random() * 50) + 5),
-                            description: (metadata?.frontmatter?.description) || 
-                                        (descMatch ? descMatch[1] : "Looted item"),
-                            isConsumable: isConsumable,
-                            currentUses: consumableMatch ? parseInt(consumableMatch[1]) : 1,
-                            maxUses: consumableMatch ? parseInt(consumableMatch[2]) : 1
-                        };
-                        
-                        foundItems.push(item);
-                    } catch (error) {
-                        console.error("Error parsing loot item:", error);
-                    }
-                }
-                
-                // Add items to inventory
-                if (foundItems.length > 0) {
-                    foundItems.forEach(newItem => {
-                        // Check if item already exists in inventory
-                        const existingItem = this.settings.inventory.find(i => i.name === newItem.name);
-                        if (existingItem) {
-                            existingItem.quantity += 1;
-                        } else {
-                            this.settings.inventory.push(newItem);
-                        }
-                    });
-                    
-                    // Save settings
-                    await this.saveSettings();
-                    
-                    // Create notification message
-                    const itemNames = foundItems.map(item => item.name).join(", ");
-                    new Notice(`You found: ${itemNames}!`);
+                if (customTreasure) {
+                    // Use custom treasure logic
+                    await this.processCustomTreasure(customTreasure);
                 } else {
-                    new Notice("You found nothing valuable.");
+                    // Use original folder-based logic
+                    await this.processRegularLoot(lootPath, minItems, maxItems, chancePercent);
                 }
             });
         
             // Add a small description
-            el.createEl('p', { 
-                text: `Chance to find ${minItems}-${maxItems} random items from ${lootPath || 'any item folder'}.`,
-                cls: 'rpg-loot-description'
-            });
+            const customTreasure = this.settings.customTreasures?.find(t => t.name === lootPath);
+            if (customTreasure) {
+                el.createEl('p', { 
+                    text: `Custom treasure: ${customTreasure.description}`,
+                    cls: 'rpg-loot-description'
+                });
+            } else {
+                el.createEl('p', { 
+                    text: `Chance to find ${minItems}-${maxItems} random items from ${lootPath || 'any item folder'}.`,
+                    cls: 'rpg-loot-description'
+                });
+            }
         });
     }
 
@@ -451,6 +398,158 @@ export default class RPGInventoryPlugin extends Plugin {
         
         await this.saveSettings();
     }
+
+        async processCustomTreasure(customTreasure: CustomTreasure): Promise<void> {
+        // First, check if there's a chance of finding nothing
+        const rollChance = Math.random() * 100;
+        if (rollChance > customTreasure.chancePercent) {
+            new Notice("You found nothing this time!");
+            return;
+        }
+
+        const foundItems: InventoryItem[] = [];
+        
+        // Add fixed items first
+        for (const itemPath of customTreasure.fixedItems) {
+            const item = await this.createItemFromPath(itemPath, "Fixed treasure item");
+            if (item) foundItems.push(item);
+        }
+        
+        // Process random pools
+        for (const pool of customTreasure.randomPools) {
+            if (Math.random() <= pool.chance && pool.items.length > 0) {
+                const shuffled = [...pool.items].sort(() => Math.random() - 0.5);
+                const numItemsFromPool = Math.min(pool.maxItems, shuffled.length);
+                
+                for (let i = 0; i < numItemsFromPool; i++) {
+                    const item = await this.createItemFromPath(shuffled[i], "Rare treasure find");
+                    if (item) foundItems.push(item);
+                }
+            }
+        }
+        
+        // Add random items if specified
+        if (customTreasure.maxRandomItems > 0) {
+            const allPossibleItems = [
+                ...customTreasure.fixedItems,
+                ...customTreasure.randomPools.flatMap(pool => pool.items)
+            ];
+            
+            if (allPossibleItems.length > 0) {
+                // ✅ CORREÇÃO: Usar minRandomItems em vez de minRandomItems
+                const minRandom = customTreasure.minRandomItems || 0;
+                const maxRandom = customTreasure.maxRandomItems || 3;
+                const numRandomItems = Math.floor(Math.random() * (maxRandom - minRandom + 1)) + minRandom;
+                
+                for (let i = 0; i < numRandomItems; i++) {
+                    if (Math.random() <= customTreasure.randomChance) {
+                        const randomPath = allPossibleItems[Math.floor(Math.random() * allPossibleItems.length)];
+                        const item = await this.createItemFromPath(randomPath, "Random treasure");
+                        if (item) foundItems.push(item);
+                    }
+                }
+            }
+        }
+        
+        // Add items to inventory and show result
+        await this.addItemsToInventory(foundItems);
+    }
+
+    async processRegularLoot(lootPath: string, minItems: number, maxItems: number, chancePercent: number): Promise<void> {
+        // First, check if there's a chance of finding nothing
+        const rollChance = Math.random() * 100;
+        if (rollChance > chancePercent) {
+            new Notice("You found nothing this time!");
+            return;
+        }
+
+        // Get all potential loot items from the specified folder
+        const lootFiles = this.app.vault.getMarkdownFiles().filter(file => {
+            // If no specific path is given, use any folder with items
+            if (!lootPath) {
+                return this.getItemFolders().some(path =>
+                    file.path.startsWith(path));
+                }
+            // Otherwise use the specified path
+            return file.path.startsWith(lootPath);
+        });
+
+        if (lootFiles.length === 0) {
+            new Notice(`No loot items found in ${lootPath || 'any item folders'}!`);
+            return;
+        }
+
+        // Determine how many items to give
+        const numItems = Math.floor(Math.random() * (maxItems - minItems + 1)) + minItems;
+        
+        // Select random items (may include duplicates)
+        const foundItems: InventoryItem[] = [];
+        for (let i = 0; i < numItems; i++) {
+            const randomIndex = Math.floor(Math.random() * lootFiles.length);
+            const lootFile = lootFiles[randomIndex];
+            const item = await this.createItemFromPath(lootFile.path, "Looted item");
+            if (item) foundItems.push(item);
+        }
+        
+        await this.addItemsToInventory(foundItems);
+    }
+
+    async createItemFromPath(itemPath: string, defaultDescription: string): Promise<InventoryItem | null> {
+        try {
+            const lootFile = this.app.vault.getAbstractFileByPath(itemPath) as TFile;
+            if (!lootFile) return null;
+
+            // Get file metadata for item properties
+            const metadata = this.app.metadataCache.getFileCache(lootFile);
+            const content = await this.app.vault.read(lootFile);
+            
+            // Try to parse properties from file
+            const priceMatch = content.match(/\((\d+)\s+#price\)/);
+            const descMatch = content.match(/\(([^)]+)\s+#description\)/);
+            const consumableMatch = content.match(/(\d+)\/(\d+)\s+#consumable/);
+            const isConsumable = content.includes("#consumable");
+            
+            // Create the item object
+            return {
+                name: lootFile.basename,
+                file: lootFile.path,
+                quantity: 1,
+                price: (metadata?.frontmatter?.price) || 
+                       (priceMatch ? parseInt(priceMatch[1]) : Math.floor(Math.random() * 50) + 5),
+                description: (metadata?.frontmatter?.description) || 
+                            (descMatch ? descMatch[1] : defaultDescription),
+                isConsumable: isConsumable,
+                currentUses: consumableMatch ? parseInt(consumableMatch[1]) : 1,
+                maxUses: consumableMatch ? parseInt(consumableMatch[2]) : 1
+            };
+        } catch (error) {
+            console.error("Error parsing item:", error);
+            return null;
+        }
+    }
+
+    async addItemsToInventory(foundItems: InventoryItem[]): Promise<void> {
+        if (foundItems.length > 0) {
+            foundItems.forEach(newItem => {
+                // Check if item already exists in inventory
+                const existingItem = this.settings.inventory.find(i => i.name === newItem.name);
+                if (existingItem) {
+                    existingItem.quantity += 1;
+                } else {
+                    this.settings.inventory.push(newItem);
+                }
+            });
+            
+            // Save settings
+            await this.saveSettings();
+            
+            // Create notification message
+            const itemNames = foundItems.map(item => item.name).join(", ");
+            new Notice(`You found: ${itemNames}!`);
+        } else {
+            new Notice("You found nothing valuable.");
+        }
+    }    
 }
 
 class RPGInventoryView extends MarkdownView {
@@ -1088,6 +1187,59 @@ class RPGInventorySettingTab extends PluginSettingTab {
                     };
                 });
             });
+        // Custom Treasure Creation
+        containerEl.createEl('h3', { text: 'Custom Treasure Creator' });
+        const customTreasureDiv = containerEl.createEl('div', { cls: 'rpg-inventory-custom-treasure' });
+
+        const customTreasureButton = customTreasureDiv.createEl('button', { 
+            text: 'Create Custom Treasure', 
+            cls: 'mod-cta' 
+        });
+        customTreasureButton.addEventListener('click', () => {
+            new CustomTreasureCreatorModal(this.app, this.plugin).open();
+        });
+
+        // Display existing custom treasures
+        if (this.plugin.settings.customTreasures && this.plugin.settings.customTreasures.length > 0) {
+            const customTreasureList = containerEl.createEl('div', { cls: 'rpg-inventory-custom-treasure-list' });
+    
+            this.plugin.settings.customTreasures.forEach((treasure, index) => {
+                const treasureDiv = customTreasureList.createEl('div', { cls: 'rpg-inventory-treasure-item' });
+                
+                const treasureInfo = treasureDiv.createEl('div', { cls: 'rpg-inventory-treasure-info' });
+                treasureInfo.createEl('span', { text: treasure.name, cls: 'treasure-name' });
+                const fixedCount = Array.isArray(treasure.fixedItems) ? treasure.fixedItems.length : 0;
+                const poolCount = Array.isArray(treasure.randomPools) ? treasure.randomPools.length : 0;
+
+                treasureInfo.createEl('span', {
+                    text: `Fixed Items: ${fixedCount}, Random Pools: ${poolCount}, Chance: ${treasure.chancePercent}%`,
+                    cls: 'treasure-details'
+                });
+                
+                const deleteButton = treasureDiv.createEl('button', { text: 'Remove' });
+                deleteButton.addEventListener('click', async () => {
+                    this.plugin.settings.customTreasures.splice(index, 1);
+                    await this.plugin.saveSettings();
+                    this.display(); // Refresh settings panel
+                });
+
+                const editButton = treasureDiv.createEl('button', { text: 'Edit' });
+                editButton.addEventListener('click', async () => {
+                    const editModal = new CustomTreasureCreatorModal(this.app, this.plugin);
+                    editModal.customTreasure = JSON.parse(JSON.stringify(treasure)); // Copy the treasure
+                    editModal.open();
+            
+                    // When saving, replace the old one
+                    const originalSave = editModal.saveCustomTreasure;
+                    editModal.saveCustomTreasure = async () => {
+                        this.plugin.settings.customTreasures[index] = editModal.customTreasure;
+                        await this.plugin.saveSettings();
+                        this.display(); // Update the list
+                        editModal.close();
+                    };
+                });
+            });
+        }
         }    
     }
 }
@@ -1762,6 +1914,372 @@ class CustomShopModal extends Modal {
             this.close();
             new InventoryModal(this.app, this.plugin).open();
         });
+    }
+    
+    onClose(): void {
+        const { contentEl } = this;
+        contentEl.empty();
+    }
+}
+
+class CustomTreasureCreatorModal extends Modal {
+    plugin: RPGInventoryPlugin;
+    customTreasure: CustomTreasure;
+    allItems: AllItemsEntry[];
+    saveCustomTreasure: () => Promise<void>;
+
+    constructor(app: any, plugin: RPGInventoryPlugin) {
+        super(app);
+        this.plugin = plugin;
+        this.customTreasure = {
+            name: '',
+            description: '',
+            fixedItems: [],
+            randomPools: [],
+            randomChance: 0.3,
+            maxRandomItems: 3,
+            minRandomItems: 1,
+            minItems: 1,
+            maxItems: 3,
+            chancePercent: 70
+        };
+        this.allItems = [];
+        this.saveCustomTreasure = this.defaultSaveCustomTreasure.bind(this);
+    }
+
+    async defaultSaveCustomTreasure(): Promise<void> {
+        if (!this.customTreasure.name) {
+            new Notice('Please enter a treasure name');
+            return;
+        }
+
+        if (!Array.isArray(this.plugin.settings.customTreasures)) {
+            this.plugin.settings.customTreasures = [];
+        }
+
+        const existingIndex = this.plugin.settings.customTreasures.findIndex(treasure => treasure.name === this.customTreasure.name);
+
+        if (existingIndex !== -1) {
+            this.plugin.settings.customTreasures[existingIndex] = this.customTreasure;
+        } else {
+            this.plugin.settings.customTreasures.push(this.customTreasure);
+        }
+
+        await this.plugin.saveSettings();
+        new Notice(`Custom treasure "${this.customTreasure.name}" saved!`);
+        this.close();
+    }
+
+    addRandomPool(container: HTMLElement): void {
+        const pool: RandomPool = { name: '', chance: 0.3, maxItems: 3, items: [] };
+        this.customTreasure.randomPools.push(pool);
+    
+        const poolDiv = container.createEl('div', { cls: 'random-pool-block' });
+        poolDiv.style.border = "1px solid var(--background-modifier-border)";
+        poolDiv.style.padding = "10px";
+        poolDiv.style.marginBottom = "10px";
+    
+        const controlsDiv = poolDiv.createEl('div', { cls: 'pool-controls' });
+
+        // Field for Random Pool Name
+        const nameInput = controlsDiv.createEl('input', { 
+            type: 'text', 
+            placeholder: 'Pool Name (ex: Rare Gems)', 
+            cls: 'input-pool-name' 
+        }) as HTMLInputElement;
+        nameInput.addEventListener('change', () => {
+            pool.name = nameInput.value;
+        });
+    
+        const chanceInput = controlsDiv.createEl('input', { 
+            type: 'number', 
+            value: '30', 
+            placeholder: 'Chance %' 
+        }) as HTMLInputElement;
+        chanceInput.addEventListener('change', () => {
+            pool.chance = Math.min(Math.max(parseInt(chanceInput.value) / 100, 0), 1);
+        });
+    
+        const maxInput = controlsDiv.createEl('input', { 
+            type: 'number', 
+            value: '3', 
+            placeholder: 'Max Items' 
+        }) as HTMLInputElement;
+        maxInput.addEventListener('change', () => {
+            pool.maxItems = Math.max(parseInt(maxInput.value), 0);
+        });
+    
+        const removePoolBtn = controlsDiv.createEl('button', { text: 'Remove Pool' });
+        removePoolBtn.addEventListener('click', () => {
+            const index = this.customTreasure.randomPools.indexOf(pool);
+            if (index !== -1) {
+                this.customTreasure.randomPools.splice(index, 1);
+                poolDiv.remove();
+            }
+        });
+    
+        const itemList = poolDiv.createEl('div', { cls: 'pool-item-list' });
+    
+        const addItemButton = poolDiv.createEl('button', { text: 'Add Item to Pool', cls: 'add-item-button' });
+        addItemButton.addEventListener('click', () => {
+            this.showItemSelector(pool.items, () => {
+                itemList.empty();
+                pool.items.forEach(path => {
+                    const itemDiv = itemList.createEl('div', { text: path.split('/').pop()?.replace('.md', '') || '' });
+                });
+            });
+        });
+    }
+    async loadAllItems(): Promise<void> {
+        // Get all markdown files from item folders
+        this.allItems = [];
+        
+        for (const folderPath of this.plugin.getItemFolders()) {
+            const itemFiles = this.app.vault.getMarkdownFiles().filter((file: TFile) =>
+                file.path.startsWith(folderPath));
+                
+            for (const file of itemFiles) {
+                this.allItems.push({
+                    name: file.basename,
+                    path: file.path
+                });
+            }
+        }
+    }
+    
+    async onOpen(): Promise<void> {
+        await this.loadAllItems();
+        
+        const { contentEl } = this;
+        contentEl.empty();
+        
+        contentEl.createEl('h2', { text: 'Create Custom Treasure' });
+        
+        // Basic treasure information
+        const basicInfoDiv = contentEl.createEl('div', { cls: 'custom-treasure-basic-info' });
+        
+        // Treasure name
+        const nameDiv = basicInfoDiv.createEl('div', { cls: 'setting-item' });
+        nameDiv.createEl('span', { text: 'Treasure Name:', cls: 'setting-item-name' });
+        const nameInput = nameDiv.createEl('input', { 
+            type: 'text',
+            value: this.customTreasure.name,
+            placeholder: 'Custom Treasure Name'
+        }) as HTMLInputElement;
+        nameInput.addEventListener('change', () => {
+            this.customTreasure.name = nameInput.value;
+        });
+        
+        // Treasure description
+        const descDiv = basicInfoDiv.createEl('div', { cls: 'setting-item' });
+        descDiv.createEl('span', { text: 'Description:', cls: 'setting-item-name' });
+        const descInput = descDiv.createEl('input', { 
+            type: 'text',
+            value: this.customTreasure.description,
+            placeholder: 'Treasure description'
+        }) as HTMLInputElement;
+        descInput.addEventListener('change', () => {
+            this.customTreasure.description = descInput.value;
+        });
+        
+        // Treasure chance settings
+        const chanceDiv = basicInfoDiv.createEl('div', { cls: 'setting-item' });
+        chanceDiv.createEl('span', { text: 'Success Chance (%):', cls: 'setting-item-name' });
+        const chanceInput = chanceDiv.createEl('input', { 
+            type: 'number',
+            value: this.customTreasure.chancePercent.toString(),
+            placeholder: '70'
+        }) as HTMLInputElement;
+        chanceInput.addEventListener('change', () => {
+            let chance = parseInt(chanceInput.value);
+            if (chance < 0) chance = 0;
+            if (chance > 100) chance = 100;
+            this.customTreasure.chancePercent = chance;
+        });
+        
+        // Min/Max items
+        const minItemsDiv = basicInfoDiv.createEl('div', { cls: 'setting-item' });
+        minItemsDiv.createEl('span', { text: 'Min Items:', cls: 'setting-item-name' });
+        const minItemsInput = minItemsDiv.createEl('input', { 
+            type: 'number',
+            value: this.customTreasure.minItems.toString(),
+            placeholder: '1'
+        }) as HTMLInputElement;
+        minItemsInput.addEventListener('change', () => {
+            let min = parseInt(minItemsInput.value);
+            if (min < 0) min = 0;
+            this.customTreasure.minItems = min;
+        });
+        
+        const maxItemsDiv = basicInfoDiv.createEl('div', { cls: 'setting-item' });
+        maxItemsDiv.createEl('span', { text: 'Max Items:', cls: 'setting-item-name' });
+        const maxItemsInput = maxItemsDiv.createEl('input', { 
+            type: 'number',
+            value: this.customTreasure.maxItems.toString(),
+            placeholder: '3'
+        }) as HTMLInputElement;
+        maxItemsInput.addEventListener('change', () => {
+            let max = parseInt(maxItemsInput.value);
+            if (max < 0) max = 0;
+            this.customTreasure.maxItems = max;
+        });
+        
+        // Random item settings
+        const randomDiv = basicInfoDiv.createEl('div', { cls: 'setting-item' });
+        randomDiv.createEl('span', { text: 'Random Item Chance (%):', cls: 'setting-item-name' });
+        const randomChanceInput = randomDiv.createEl('input', { 
+            type: 'number',
+            value: (this.customTreasure.randomChance * 100).toString(),
+            placeholder: '30'
+        }) as HTMLInputElement;
+        randomChanceInput.addEventListener('change', () => {
+            let chance = parseInt(randomChanceInput.value) / 100;
+            if (chance < 0) chance = 0;
+            if (chance > 1) chance = 1;
+            this.customTreasure.randomChance = chance;
+        });
+        
+        // Min Random Items
+        const minRandomDiv = basicInfoDiv.createEl('div', { cls: 'setting-item' });
+        minRandomDiv.createEl('span', { text: 'Min Random Items:', cls: 'setting-item-name' });
+        const minRandomInput = minRandomDiv.createEl('input', { 
+            type: 'number',
+            value: this.customTreasure.minRandomItems.toString(),
+            placeholder: '1'
+        }) as HTMLInputElement;
+        minRandomInput.addEventListener('change', () => {
+            let min = parseInt(minRandomInput.value);
+            if (min < 0) min = 0;
+            this.customTreasure.minRandomItems = min;
+        });
+        
+        const maxRandomDiv = basicInfoDiv.createEl('div', { cls: 'setting-item' });
+        maxRandomDiv.createEl('span', { text: 'Max Random Items:', cls: 'setting-item-name' });
+        const maxRandomInput = maxRandomDiv.createEl('input', { 
+            type: 'number',
+            value: this.customTreasure.maxRandomItems.toString(),
+            placeholder: '3'
+        }) as HTMLInputElement;
+        maxRandomInput.addEventListener('change', () => {
+            let max = parseInt(maxRandomInput.value);
+            if (max < 0) max = 0;
+            this.customTreasure.maxRandomItems = max;
+        });
+        
+        // Item Selection
+        const itemSelectionDiv = contentEl.createEl('div', { cls: 'custom-treasure-item-selection' });
+        itemSelectionDiv.createEl('h3', { text: 'Select Items for Treasure' });
+        
+        // Fixed Items Column
+        const fixedItemsDiv = itemSelectionDiv.createEl('div', { cls: 'items-column' });
+        fixedItemsDiv.createEl('h4', { text: 'Fixed Items (Always Obtained)' });
+        const fixedList = fixedItemsDiv.createEl('div', { cls: 'item-list fixed-items' });
+        
+        // Show selected fixed items
+        const updateFixedList = () => {
+            fixedList.empty();
+            this.customTreasure.fixedItems.forEach((itemPath, index) => {
+                const itemDiv = fixedList.createEl('div', { cls: 'selected-item' });
+                
+                const itemName = itemPath.split('/').pop()?.replace('.md', '') || '';
+                itemDiv.createEl('span', { text: itemName });
+                
+                const removeBtn = itemDiv.createEl('button', { text: 'Remove' });
+                removeBtn.addEventListener('click', () => {
+                    this.customTreasure.fixedItems.splice(index, 1);
+                    updateFixedList();
+                });
+            });
+            
+            // Add button to add fixed items
+            const addFixedBtn = fixedList.createEl('button', { 
+                text: 'Add Fixed Item', 
+                cls: 'add-item-button' 
+            });
+            addFixedBtn.addEventListener('click', () => {
+                this.showItemSelector(this.customTreasure.fixedItems, updateFixedList);
+            });
+        };
+        
+        updateFixedList();
+
+        const randomPoolsDiv = contentEl.createEl('div', { cls: 'random-pools-container' });
+        randomPoolsDiv.createEl('h3', { text: 'Random Pools' });
+
+        const addPoolButton = randomPoolsDiv.createEl('button', { 
+            text: 'Add New Random Pool', 
+            cls: 'mod-cta' 
+        });
+        addPoolButton.addEventListener('click', () => {
+            this.addRandomPool(randomPoolsDiv);
+        });
+
+        // Render existing pools
+        this.customTreasure.randomPools.forEach(() => {
+            this.addRandomPool(randomPoolsDiv);
+        });
+        
+        const saveButton = contentEl.createEl('button', { cls: 'mod-cta save-custom-treasure' });
+
+        const saveIcon = saveButton.createEl('span', { cls: 'save-icon' });
+        saveIcon.innerText = '💎'; // Gem icon for treasure
+
+        const saveText = saveButton.createEl('span');
+        saveText.innerText = ' Save Custom Treasure';
+
+        saveButton.addEventListener('click', async () => {
+            await this.saveCustomTreasure();
+        });
+    }       
+        
+    showItemSelector(targetArray: string[], updateCallback: () => void): void {
+        // Create a modal with all available items
+        const itemModal = new Modal(this.app);
+        itemModal.titleEl.setText('Select Items');
+        
+        const searchInput = itemModal.contentEl.createEl('input', {
+            type: 'text',
+            placeholder: 'Search items...',
+            cls: 'item-search'
+        }) as HTMLInputElement;
+        
+        const itemList = itemModal.contentEl.createEl('div', { cls: 'all-items-list' });
+        
+        const renderItems = (searchTerm = '') => {
+            itemList.empty();
+            
+            const filteredItems = searchTerm ? 
+                this.allItems.filter(item => 
+                    item.name.toLowerCase().includes(searchTerm.toLowerCase())) : 
+                this.allItems;
+            
+            filteredItems.forEach(item => {
+                const itemDiv = itemList.createEl('div', { cls: 'item-option' });
+                itemDiv.setText(item.name);
+                
+                // Don't show already selected items
+                if (targetArray.includes(item.path)) {
+                    itemDiv.addClass('item-already-selected');
+                    return;
+                }
+                
+                itemDiv.addEventListener('click', () => {
+                    targetArray.push(item.path);
+                    updateCallback();
+                    itemModal.close();
+                });
+            });
+        };
+        
+        // Initial render
+        renderItems();
+        
+        // Search functionality
+        searchInput.addEventListener('input', () => {
+            renderItems(searchInput.value);
+        });
+        
+        itemModal.open();
     }
     
     onClose(): void {

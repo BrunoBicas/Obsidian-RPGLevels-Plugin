@@ -2030,7 +2030,7 @@ class CustomShopModal extends Modal {
                                        (metadata?.frontmatter?.price) ||
                                        Math.floor(Math.random() * 90) + 10,
                                 description: (metadata?.frontmatter?.description) || "Rare find!",
-                                stock: Math.floor(Math.random() * 3) + 1,
+                                stock: this.plugin.settings.shopStock[itemPath] || Math.floor(Math.random() * 3) + 1,
                                 isConsumable: content.includes("#consumable"),
                                 currentUses: 1,
                                 maxUses: 1,

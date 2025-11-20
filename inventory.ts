@@ -296,7 +296,7 @@ export default class RPGInventoryPlugin extends Plugin {
         }
     }
 
-    async restockShops(): Promise<void> {
+async restockShops(): Promise<void> {
         // Get all item files from regular shops
         const itemFiles = this.app.vault.getMarkdownFiles().filter(file => {
             // Check if file is in any shop folder
@@ -304,7 +304,7 @@ export default class RPGInventoryPlugin extends Plugin {
                 file.path.startsWith(shop.folderPath));
         });
         
-        // NOVO: Get all item files from custom shops
+        // Get all item files from custom shops
         const customShopFiles = new Set<string>();
         if (this.settings.customShops && Array.isArray(this.settings.customShops)) {
             this.settings.customShops.forEach(customShop => {
@@ -329,19 +329,21 @@ export default class RPGInventoryPlugin extends Plugin {
         }
         
         // Combine regular shop files with custom shop files
+        // Fix: Ensure we don't add null files or duplicates
         const allShopFiles = [...itemFiles];
         customShopFiles.forEach(filePath => {
             const file = this.app.vault.getAbstractFileByPath(filePath) as TFile;
-            if (file && !allShopFiles.some(f => f.path === file.path)) {
+            // Only add if file exists and isn't already in the list
+            if (file && file instanceof TFile && !allShopFiles.some(f => f.path === file.path)) {
                 allShopFiles.push(file);
             }
         });
-        
+
         // For each item, get its base price from metadata or content
         for (const file of allShopFiles) {
             // Restock quantity (1-10)
             this.settings.shopStock[file.path] = Math.floor(Math.random() * 10) + 1;
-            
+
             // Apply price variation if item exists in inventory or has a known base price
             if (this.settings.itemBasePrice === undefined) {
                 this.settings.itemBasePrice = {};
@@ -349,7 +351,6 @@ export default class RPGInventoryPlugin extends Plugin {
             
             // Try to get existing base price or determine from file
             if (!this.settings.itemBasePrice[file.path]) {
-                // Get the base price from metadata if possible
                 try {
                     const metadata = this.app.metadataCache.getFileCache(file);
                     const content = await this.app.vault.read(file);
@@ -372,16 +373,16 @@ export default class RPGInventoryPlugin extends Plugin {
                     
                     this.settings.itemBasePrice[file.path] = basePrice;
                 } catch (error) {
-                    console.error("Error getting base price:", error);
+                    console.error(`Error getting base price for ${file.path}:`, error);
                     this.settings.itemBasePrice[file.path] = Math.floor(Math.random() * 90) + 10;
                 }
             }
         
             // Now apply price variation
             const basePrice = this.settings.itemBasePrice[file.path];
-            const variation = this.settings.priceVariation; // 0.3 = 30%
+            const variation = this.settings.priceVariation; 
             
-            // Random variation between -30% to +30%
+            // Random variation between -variation to +variation
             const variationFactor = 1 + (Math.random() * variation * 2 - variation);
             
             // Store the current price
@@ -395,8 +396,8 @@ export default class RPGInventoryPlugin extends Plugin {
         
         // Update last restock date
         this.settings.lastRestockDate = Date.now();
-        
         await this.saveSettings();
+        console.log("Restock complete. Items updated:", allShopFiles.length);
     }
 
         async processCustomTreasure(customTreasure: CustomTreasure): Promise<void> {
@@ -1970,11 +1971,10 @@ class CustomShopModal extends Modal {
         this.shopItems = [];
     }
     
-    async prepareShopItems(): Promise<void> {
-        // Start with fixed items
+async prepareShopItems(): Promise<void> {
         this.shopItems = [];
         
-        // Add all fixed items
+        // 1. Add all fixed items
         for (const itemPath of this.customShop.fixedItems) {
             const file = this.app.vault.getAbstractFileByPath(itemPath) as TFile;
             if (file) {
@@ -1982,13 +1982,20 @@ class CustomShopModal extends Modal {
                     const metadata = this.app.metadataCache.getFileCache(file);
                     const content = await this.app.vault.read(file);
                     
-                    // Extract price, description, and consumable status
                     const priceMatch = content.match(/\((\d+)\s+#price\)/);
                     const descMatch = content.match(/\(([^)]+)\s+#description\)/);
                     const consumableMatch = content.match(/(\d+)\/(\d+)\s+#consumable/);
-                    const isConsumable = content.includes("#consumable");
                     
-                    // Create the item
+                    // FIX: Handle stock correctly. 
+                    // Check if it is strictly undefined. 0 is a valid number!
+                    let currentStock = this.plugin.settings.shopStock[itemPath];
+                    
+                    // If stock hasn't been initialized yet, initialize it
+                    if (currentStock === undefined) {
+                        currentStock = Math.floor(Math.random() * 5) + 1;
+                        this.plugin.settings.shopStock[itemPath] = currentStock;
+                    }
+
                     this.shopItems.push({
                         name: file.basename,
                         file: file,
@@ -1996,10 +2003,9 @@ class CustomShopModal extends Modal {
                                (metadata?.frontmatter?.price) || 
                                (priceMatch ? parseInt(priceMatch[1]) : Math.floor(Math.random() * 90) + 10),
                         description: (metadata?.frontmatter?.description) || 
-                                    (descMatch ? descMatch[1] : "No description available."),
-                        stock: this.plugin.settings.shopStock[itemPath] || 
-                               Math.floor(Math.random() * 5) + 1, // 1-5 stock for fixed items
-                        isConsumable: isConsumable,
+                                   (descMatch ? descMatch[1] : "No description available."),
+                        stock: currentStock, // Use the safe variable
+                        isConsumable: content.includes("#consumable"),
                         currentUses: consumableMatch ? parseInt(consumableMatch[1]) : 1,
                         maxUses: consumableMatch ? parseInt(consumableMatch[2]) : 1
                     });
@@ -2009,7 +2015,7 @@ class CustomShopModal extends Modal {
             }
         }
         
-        // For each random pool
+        // 2. For each random pool (Logic kept mostly same, but added safeguards)
         for (const pool of this.customShop.randomPools) {
             const shuffled = [...pool.items].sort(() => Math.random() - 0.5);
             const limit = Math.min(pool.maxItems, shuffled.length);
@@ -2023,6 +2029,14 @@ class CustomShopModal extends Modal {
                             const metadata = this.app.metadataCache.getFileCache(file);
                             const content = await this.app.vault.read(file);
                             
+                            // For random items, we usually generate fresh small stock if not exists
+                            // But if you want persistent stock for random items too:
+                            let currentStock = this.plugin.settings.shopStock[itemPath];
+                            if (currentStock === undefined) {
+                                currentStock = Math.floor(Math.random() * 3) + 1;
+                                this.plugin.settings.shopStock[itemPath] = currentStock;
+                            }
+
                             this.shopItems.push({
                                 name: file.basename,
                                 file: file,
@@ -2030,7 +2044,7 @@ class CustomShopModal extends Modal {
                                        (metadata?.frontmatter?.price) ||
                                        Math.floor(Math.random() * 90) + 10,
                                 description: (metadata?.frontmatter?.description) || "Rare find!",
-                                stock: Math.floor(Math.random() * 3) + 1,
+                                stock: currentStock,
                                 isConsumable: content.includes("#consumable"),
                                 currentUses: 1,
                                 maxUses: 1,
@@ -2043,6 +2057,8 @@ class CustomShopModal extends Modal {
                 }
             }
         }
+        // Save any initializations we made to settings
+        await this.plugin.saveSettings(); 
     }
     
     async onOpen(): Promise<void> {
@@ -2088,7 +2104,6 @@ class CustomShopModal extends Modal {
         
         // Display shop items
         const shopContainer = contentEl.createEl('div', { cls: 'shop-container' });
-        
         if (this.shopItems.length === 0) {
             shopContainer.createEl('p', { text: `No items available in ${this.customShop.name}.` });
         } else {
@@ -2099,12 +2114,10 @@ class CustomShopModal extends Modal {
             headerRow.createEl('th', { text: 'Stock' });
             headerRow.createEl('th', { text: 'Description' });
             headerRow.createEl('th', { text: 'Action' });
-            
+
             this.shopItems.forEach(item => {
                 const row = table.createEl('tr');
-                if (item.isRare) {
-                    row.addClass('rare-item-row');
-                }
+                if (item.isRare) row.addClass('rare-item-row');
                 
                 const nameCell = row.createEl('td');
                 const itemLink = nameCell.createEl('a', { text: item.name });
@@ -2113,37 +2126,44 @@ class CustomShopModal extends Modal {
                     this.app.workspace.getLeaf().openFile(item.file);
                 });
                 
-                if (item.isRare) {
-                    nameCell.createEl('span', { text: ' ⭐', cls: 'rare-item-star' });
-                }
+                if (item.isRare) nameCell.createEl('span', { text: ' ⭐', cls: 'rare-item-star' });
                 
                 row.createEl('td', { text: item.price.toString() });
+                
+                // Stock Cell
                 row.createEl('td', { text: item.stock.toString() });
+                
                 row.createEl('td', { text: item.description });
                 
                 const actionCell = row.createEl('td');
                 const buyButton = actionCell.createEl('button', { text: 'Buy' });
                 
-                // Disable buy button if out of stock
+                // VISUAL CHECK: Disable button if out of stock
                 if (item.stock <= 0) {
                     buyButton.disabled = true;
                     buyButton.addClass('button-disabled');
+                    buyButton.setText('Sold Out'); // Clearer visual feedback
                 }
                 
                 buyButton.addEventListener('click', async () => {
-                    // Check if player has enough coins
+                    // 1. Check coins
                     if (this.plugin.settings.coins < item.price) {
                         new Notice("Not enough coins!");
                         return;
                     }
                     
-                    // Check if item is in stock
-                    if (item.stock <= 0) {
+                    // 2. CRITICAL FIX: Check global storage, not just local item
+                    const currentGlobalStock = this.plugin.settings.shopStock[item.file.path];
+                    
+                    // If stock is missing or 0, fail safely
+                    if (currentGlobalStock === undefined || currentGlobalStock <= 0) {
                         new Notice("Item out of stock!");
+                        // Force refresh to update the UI to show 0
+                        this.onOpen(); 
                         return;
                     }
                     
-                    // Add item to inventory
+                    // 3. Add item to inventory
                     const existingItem = this.plugin.settings.inventory.find(i => i.name === item.name);
                     if (existingItem) {
                         existingItem.quantity += 1;
@@ -2160,21 +2180,13 @@ class CustomShopModal extends Modal {
                         });
                     }
                     
-                    // Deduct coins
+                    // 4. Deduct coins
                     this.plugin.settings.coins -= item.price;
-                    
-                    // Reduce stock
-                    item.stock -= 1;
-                    
-                    // Also update the global stock if needed
-                    if (this.plugin.settings.shopStock[item.file.path] !== undefined) {
-                        this.plugin.settings.shopStock[item.file.path] -= 1;
-                    } else {
-                        this.plugin.settings.shopStock[item.file.path] = item.stock;
-                    }
+
+                    // 5. Reduce stock in Global Settings
+                    this.plugin.settings.shopStock[item.file.path] = currentGlobalStock - 1;
                     
                     await this.plugin.saveSettings();
-                    
                     new Notice(`Purchased ${item.name}!`);
                     this.onOpen(); // Refresh the modal
                 });

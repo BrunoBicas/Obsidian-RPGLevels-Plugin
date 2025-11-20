@@ -62,6 +62,13 @@ interface ShopItem {
     isRare?: boolean;
 }
 
+interface MarketRegion {
+    name: string;
+    description: string;
+    // Chave: Pasta ou Raridade (ex: "Weapons/", "Rare"), Valor: Multiplicador (ex: 1.5)
+    priceModifiers: Record<string, number>; 
+}
+
 interface AllItemsEntry {
     name: string;
     path: string;
@@ -81,6 +88,8 @@ interface RPGInventorySettings {
     itemCurrentPrice: Record<string, number>;
     itemFolderPath: string;
     itemBasePrice?: Record<string, number>;
+    regions: MarketRegion[];
+    currentRegionIndex: number;
 }
 
 const DEFAULT_SETTINGS: RPGInventorySettings = {
@@ -121,7 +130,24 @@ const DEFAULT_SETTINGS: RPGInventorySettings = {
     restockDays: 3,
     priceVariation: 0.3,
     itemCurrentPrice: {},
-    itemFolderPath: 'Items/'
+    itemFolderPath: 'Items/',
+    regions: [
+        {
+            name: "Global Market",
+            description: "Standard prices for all items.",
+            priceModifiers: {}
+        },
+        {
+            name: "Black Market",
+            description: "High demand for rare items, low for commons.",
+            priceModifiers: {
+                "Weapons/": 1.2, // Armas valem 20% mais aqui
+                "Potions/": 0.8,  // Poções valem menos
+                "Rare": 2.0       // Items com tag/propriedade Rare valem o dobro (preparo para o futuro)
+            }
+        }
+    ],
+    currentRegionIndex: 0    
 };
 
 export default class RPGInventoryPlugin extends Plugin {
@@ -686,7 +712,7 @@ class InventoryModal extends Modal {
         const shopButton = contentEl.createEl('button', { text: 'Open Shop', cls: 'mod-cta' });
         shopButton.addEventListener('click', () => {
             this.close();
-            new ShopModal(this.app, this.plugin).open();
+        new MarketplaceModal(this.app, this.plugin).open();
         });
         
         // Add adventure button
@@ -715,6 +741,227 @@ class InventoryModal extends Modal {
     onClose(): void {
         const { contentEl } = this;
         contentEl.empty();
+    }
+}
+
+class MarketplaceModal extends Modal {
+    plugin: RPGInventoryPlugin;
+    skillModifier: number = 0;
+    useMarketingBoost: boolean = false;
+
+    constructor(app: any, plugin: RPGInventoryPlugin) {
+        super(app);
+        this.plugin = plugin;
+    }
+
+    onOpen(): void {
+        const { contentEl } = this;
+        contentEl.empty();
+        
+        contentEl.createEl('h2', { text: '💰 Marketplace (Sell Items)' });
+
+        // --- CABEÇALHO: Configurações de Venda ---
+        const controlsDiv = contentEl.createEl('div', { cls: 'market-controls' });
+        controlsDiv.style.padding = '15px';
+        controlsDiv.style.background = 'var(--background-secondary)';
+        controlsDiv.style.borderRadius = '8px';
+        controlsDiv.style.marginBottom = '20px';
+
+        // 1. Exibição de Moedas
+        const coinHeader = controlsDiv.createEl('div', { cls: 'market-coins' });
+        coinHeader.createEl('h3', { text: `Purse: ${this.plugin.settings.coins} coins` });
+
+        // 2. Seletor de Região
+        const regionDiv = controlsDiv.createEl('div', { cls: 'setting-item' });
+        regionDiv.createEl('span', { text: '📍 Current Region:' });
+        
+        const regionSelect = regionDiv.createEl('select');
+        regionSelect.style.marginLeft = '10px';
+        
+        this.plugin.settings.regions.forEach((region, index) => {
+            const option = regionSelect.createEl('option', { 
+                text: region.name, 
+                value: index.toString() 
+            });
+            if (index === this.plugin.settings.currentRegionIndex) {
+                option.selected = true;
+            }
+        });
+
+        regionSelect.addEventListener('change', async () => {
+            this.plugin.settings.currentRegionIndex = parseInt(regionSelect.value);
+            await this.plugin.saveSettings();
+            // Atualiza a descrição da região
+            regionDesc.setText(this.plugin.settings.regions[this.plugin.settings.currentRegionIndex].description);
+        });
+
+        const currentRegion = this.plugin.settings.regions[this.plugin.settings.currentRegionIndex];
+        const regionDesc = controlsDiv.createEl('small', { 
+            text: currentRegion.description,
+            cls: 'market-region-desc'
+        });
+        regionDesc.style.display = 'block';
+        regionDesc.style.marginBottom = '10px';
+
+        // 3. Modificador de Habilidade (O input +n que você pediu)
+        const skillDiv = controlsDiv.createEl('div', { cls: 'setting-item' });
+        skillDiv.style.marginTop = '10px';
+        skillDiv.createEl('span', { text: '🎲 Skill Modifier (+n):' });
+        const skillInput = skillDiv.createEl('input', { 
+            type: 'number', 
+            value: this.skillModifier.toString() 
+        });
+        skillInput.style.width = '60px';
+        skillInput.style.marginLeft = '10px';
+        skillInput.addEventListener('change', () => {
+            this.skillModifier = parseInt(skillInput.value) || 0;
+        });
+
+        // 4. Boost de Marketing (Gastar 25g)
+        const boostDiv = controlsDiv.createEl('div', { cls: 'setting-item' });
+        boostDiv.style.marginTop = '10px';
+        
+        const boostLabel = boostDiv.createEl('label');
+        const boostCheckbox = boostLabel.createEl('input', { type: 'checkbox' });
+        boostCheckbox.checked = this.useMarketingBoost;
+        
+        boostLabel.createEl('span', { 
+            text: ' 📢 Use Marketing Boost (Cost: 25g per sale) - Adds +20 to roll' 
+        });
+
+        boostCheckbox.addEventListener('change', () => {
+            this.useMarketingBoost = boostCheckbox.checked;
+        });
+
+        // --- LISTA DE INVENTÁRIO PARA VENDA ---
+        contentEl.createEl('hr');
+        contentEl.createEl('h3', { text: 'Your Inventory' });
+
+        const inventoryContainer = contentEl.createEl('div', { cls: 'inventory-container' });
+        
+        if (this.plugin.settings.inventory.length === 0) {
+            inventoryContainer.createEl('p', { text: 'Nothing to sell.' });
+        } else {
+            const table = inventoryContainer.createEl('table');
+            const headerRow = table.createEl('tr');
+            headerRow.createEl('th', { text: 'Item' });
+            headerRow.createEl('th', { text: 'Base Value' });
+            headerRow.createEl('th', { text: 'Qty' });
+            headerRow.createEl('th', { text: 'Negotiate & Sell' });
+
+            this.plugin.settings.inventory.forEach(item => {
+                const row = table.createEl('tr');
+                
+                // Nome
+                row.createEl('td', { text: item.name });
+                
+                // Valor Base (com modificador regional visualizado)
+                const regionMod = this.getRegionalMultiplier(item);
+                let priceText = `${item.price}`;
+                if (regionMod !== 1.0) {
+                    priceText += ` (x${regionMod} region)`;
+                }
+                row.createEl('td', { text: priceText });
+
+                // Quantidade
+                row.createEl('td', { text: item.quantity.toString() });
+
+                // Ação
+                const actionCell = row.createEl('td');
+                const sellBtn = actionCell.createEl('button', { text: '🎲 Sell' });
+                
+                sellBtn.addEventListener('click', async () => {
+                    await this.processSale(item);
+                });
+            });
+        }
+        
+        // Botão Voltar
+        const backButton = contentEl.createEl('button', { text: 'Back to Inventory' });
+        backButton.style.marginTop = '20px';
+        backButton.addEventListener('click', () => {
+            this.close();
+            new InventoryModal(this.app, this.plugin).open();
+        });
+    }
+
+    // Lógica para pegar o multiplicador da região
+    getRegionalMultiplier(item: InventoryItem): number {
+        const region = this.plugin.settings.regions[this.plugin.settings.currentRegionIndex];
+        let multiplier = 1.0;
+
+        // Verifica por caminho de pasta (ex: "Weapons/")
+        for (const [key, mod] of Object.entries(region.priceModifiers)) {
+            if (item.file.includes(key)) {
+                multiplier = Math.max(multiplier, mod); // Pega o melhor modificador
+            }
+        }
+        
+        // Futuro: Verifica por raridade (se você adicionar isRare ou rarity string no item)
+        // if (item.isRare && region.priceModifiers["Rare"]) multiplier = region.priceModifiers["Rare"];
+
+        return multiplier;
+    }
+
+    async processSale(item: InventoryItem): Promise<void> {
+        // Verifica se tem dinheiro para o boost
+        if (this.useMarketingBoost && this.plugin.settings.coins < 25) {
+            new Notice("Not enough coins for marketing boost!");
+            return;
+        }
+
+        // 1. Gastar custo do boost
+        if (this.useMarketingBoost) {
+            this.plugin.settings.coins -= 25;
+        }
+
+        // 2. Calcular Rolagem
+        const d100 = Math.floor(Math.random() * 100) + 1;
+        const boostBonus = this.useMarketingBoost ? 20 : 0;
+        const totalRoll = d100 + this.skillModifier + boostBonus;
+
+        // 3. Determinar Multiplicador de Rolagem
+        let rollMultiplier = 0;
+        let resultText = "";
+
+        if (totalRoll <= 40) {
+            rollMultiplier = 0.5; // 50%
+            resultText = "Bad deal...";
+        } else if (totalRoll <= 90) {
+            rollMultiplier = 1.0; // 100%
+            resultText = "Standard price.";
+        } else {
+            rollMultiplier = 1.5; // 150%
+            resultText = "Excellent negotiation!";
+        }
+
+        // 4. Calcular Preço Final
+        const regionalMultiplier = this.getRegionalMultiplier(item);
+        const basePrice = item.price || 10; // Fallback se preço for 0
+        
+        const finalPrice = Math.floor(basePrice * rollMultiplier * regionalMultiplier);
+
+        // 5. Atualizar Inventário
+        if (item.quantity > 1) {
+            item.quantity -= 1;
+        } else {
+            const index = this.plugin.settings.inventory.indexOf(item);
+            this.plugin.settings.inventory.splice(index, 1);
+        }
+
+        // 6. Dar Dinheiro
+        this.plugin.settings.coins += finalPrice;
+        await this.plugin.saveSettings();
+
+        // 7. Feedback Visual
+        new Notice(`Rolled ${totalRoll} (D100: ${d100} + Mod: ${this.skillModifier + boostBonus})\n${resultText}\nSold for ${finalPrice} coins!`);
+        
+        // 8. Atualizar UI
+        this.onOpen();
+    }
+
+    onClose(): void {
+        this.contentEl.empty();
     }
 }
 

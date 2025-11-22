@@ -2,8 +2,9 @@
 // inventory.ts
 
 import { Plugin, Notice, PluginSettingTab, Setting, Modal, MarkdownView, TFile, TFolder, CachedMetadata, MarkdownRenderer } from 'obsidian';
+import { auctionShopModal } from './auction';
 
-interface InventoryItem {
+export interface InventoryItem {
     name: string;
     file: string;
     quantity: number;
@@ -62,11 +63,29 @@ interface ShopItem {
     isRare?: boolean;
 }
 
-interface MarketRegion {
+interface RarityMarketSettings {
+    daysToWait: number;      // Ex: 2 dias para Comum
+    chanceToFindBuyer: number; // Ex: 70% para Raro
+}
+
+export interface MarketRegion {
     name: string;
     description: string;
     // Chave: Pasta ou Raridade (ex: "Weapons/", "Rare"), Valor: Multiplicador (ex: 1.5)
-    priceModifiers: Record<string, number>; 
+    priceModifiers: Record<string, number>; // Multiplicador de preço base
+    rarityRules: Record<string, RarityMarketSettings>; // Regras de tempo/chance
+}
+
+// Um item que está atualmente num Slot de Venda
+export interface ActiveListing {
+    id: string;             // ID único
+    item: InventoryItem;    // O item em si
+    dateListed: number;     // Quando foi colocado
+    nextCheckDate: number;  // Quando o "dado" será rolado novamente
+    status: 'SEARCHING' | 'OFFER_PENDING'; // Procurando ou Comprador Achado
+    currentOffer: number;   // Valor da oferta atual (se houver)
+    offerQuality: string;   // "Low", "Standard", "High"
+    attempts: number;       // Quantas vezes já tentou vender
 }
 
 interface AllItemsEntry {
@@ -74,7 +93,7 @@ interface AllItemsEntry {
     path: string;
 }
 
-interface RPGInventorySettings {
+export interface RPGInventorySettings {
     coins: number;
     inventory: InventoryItem[];
     customTreasures: CustomTreasure[];
@@ -88,11 +107,14 @@ interface RPGInventorySettings {
     itemCurrentPrice: Record<string, number>;
     itemFolderPath: string;
     itemBasePrice?: Record<string, number>;
+    activeListings: ActiveListing[]; // Lista de itens nos slots
     regions: MarketRegion[];
     currentRegionIndex: number;
+    gameDateOffset: number; // Para simular passagem de tempo (opcional, mas útil)
+    
 }
 
-const DEFAULT_SETTINGS: RPGInventorySettings = {
+export const DEFAULT_SETTINGS: RPGInventorySettings = {
     coins: 1000,
     inventory: [],
     customTreasures: [],
@@ -131,23 +153,38 @@ const DEFAULT_SETTINGS: RPGInventorySettings = {
     priceVariation: 0.3,
     itemCurrentPrice: {},
     itemFolderPath: 'Items/',
+   activeListings: [],
+    gameDateOffset: 0,
+    currentRegionIndex: 0,
     regions: [
         {
-            name: "Global Market",
-            description: "Standard prices for all items.",
-            priceModifiers: {}
+            name: "Standard Kingdom",
+            description: "Normal trade routes.",
+            priceModifiers: {},
+            rarityRules: {
+                "Common": { daysToWait: 2, chanceToFindBuyer: 100 },
+                "Uncommon": { daysToWait: 5, chanceToFindBuyer: 100 },
+                "Rare": { daysToWait: 10, chanceToFindBuyer: 70 },
+                "Epic": { daysToWait: 10, chanceToFindBuyer: 20 },
+                "Legendary": { daysToWait: 10, chanceToFindBuyer: 1 }
+            }
         },
         {
-            name: "Black Market",
-            description: "High demand for rare items, low for commons.",
-            priceModifiers: {
+            name: "High Magic Capital",
+            description: "Faster trade for magical items.",
+            priceModifiers: { "Rare": 1.2, // Items com tag/propriedade Rare valem o dobro (preparo para o futuro)
                 "Weapons/": 1.2, // Armas valem 20% mais aqui
                 "Potions/": 0.8,  // Poções valem menos
-                "Rare": 2.0       // Items com tag/propriedade Rare valem o dobro (preparo para o futuro)
+               },
+            rarityRules: {
+                "Common": { daysToWait: 1, chanceToFindBuyer: 100 },
+                "Uncommon": { daysToWait: 3, chanceToFindBuyer: 100 },
+                "Rare": { daysToWait: 5, chanceToFindBuyer: 80 }, // Mais rápido e fácil aqui
+                "Epic": { daysToWait: 7, chanceToFindBuyer: 30 },
+                "Legendary": { daysToWait: 10, chanceToFindBuyer: 5 }
             }
         }
-    ],
-    currentRegionIndex: 0    
+    ]  
 };
 
 export default class RPGInventoryPlugin extends Plugin {
@@ -707,13 +744,21 @@ class InventoryModal extends Modal {
                 });
             });
         }
-        
+        // Dentro de InventoryModal ou onde você quiser o botão
+        const shopButton1 = contentEl.createEl('button', { text: 'Open Auction Shop 🏪' });
+        shopButton1.addEventListener('click', () => {
+            this.close();
+            new auctionShopModal(this.app, this.plugin).open();
+        });
         // Add shop button
         const shopButton = contentEl.createEl('button', { text: 'Open Shop', cls: 'mod-cta' });
         shopButton.addEventListener('click', () => {
             this.close();
         new MarketplaceModal(this.app, this.plugin).open();
         });
+        
+
+
         
         // Add adventure button
         const adventureButton = contentEl.createEl('button', { text: 'Find Treasure! 🎲' });

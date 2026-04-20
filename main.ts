@@ -194,6 +194,14 @@ interface RPGLevelsSettings {
 	skillFolders: string[];
   speed: SpeedSettings;
   vision: VisionSettings; // New vision settings
+  autoAdvantages: {
+    abilities: { [abilityName: string]: boolean };
+    skills: { [skillName: string]: boolean };
+  };
+  grantedAdvantages: {
+    abilities: { [abilityName: string]: string[] };
+    skills: { [skillName: string]: string[] };
+  };
 };
 
 
@@ -252,6 +260,14 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
 
   vision: { // New default vision settings
     senses: {}
+  },
+  autoAdvantages: {
+    abilities: {},
+    skills: {},
+  },
+  grantedAdvantages: {
+    abilities: {},
+    skills: {},
   },
 
   armorClass: {
@@ -1009,6 +1025,7 @@ async applyAllPassiveEffects() {
     this.settings.speed.baseSpeed = 30; // Reset to default before applying bonuses
     this.settings.speed.additionalSpeeds = {};
     this.settings.vision = { senses: {} }; 
+    this.settings.grantedAdvantages = { abilities: {}, skills: {} };
     this.settings.obtainedClassFeats = []; // IMPORTANT: Reset granted feats before recalculating
     this.settings.unlockedEffects = [];
     this.settings.armorClass.base = 10; 
@@ -1276,7 +1293,39 @@ async applyAllPassiveEffects() {
                 if (typeof skillName === 'string') processSkillLevel(skillName, "expert");
             });
         }
-        
+
+        const addGrantedAdvantage = (
+            type: "abilities" | "skills",
+            name: string
+        ) => {
+            if (!this.settings.grantedAdvantages[type][name]) {
+                this.settings.grantedAdvantages[type][name] = [];
+            }
+            if (!this.settings.grantedAdvantages[type][name].includes(sourcePath)) {
+                this.settings.grantedAdvantages[type][name].push(sourcePath);
+            }
+        };
+
+        const parseStringArray = (value: unknown): string[] => {
+            if (!value) return [];
+            if (Array.isArray(value)) {
+                return value.filter((entry): entry is string => typeof entry === "string");
+            }
+            if (typeof value === "string") return [value];
+            return [];
+        };
+
+        parseStringArray(effectData.grantsAbilityCheckAdvantage).forEach((abilityName: string) => {
+            const normalizedAbilityName = `${abilityName.charAt(0).toUpperCase()}${abilityName.slice(1).toLowerCase()}`;
+            if (defaultSaveAbilities.includes(normalizedAbilityName as keyof CharacterStats)) {
+                addGrantedAdvantage("abilities", normalizedAbilityName);
+            }
+        });
+
+        parseStringArray(effectData.grantsSkillAdvantage).forEach((skillName: string) => {
+            addGrantedAdvantage("skills", skillName.toLowerCase());
+        });
+
         // Salvamentos (Saving Throws)
         const processSaveLevel = (abilityName: string, level: "proficient" | "expert") => {
             const saveKey = `${abilityName.toLowerCase()}Save` as keyof typeof this.settings.proficiencies;
@@ -1606,6 +1655,18 @@ public getAllClassEffectPaths(): string[] {
 		if (this.settings.minEditLength === undefined) {
 			this.settings.minEditLength = DEFAULT_SETTINGS.minEditLength;
 		}
+    if (!this.settings.autoAdvantages) {
+      this.settings.autoAdvantages = { abilities: {}, skills: {} };
+    } else {
+      this.settings.autoAdvantages.abilities = this.settings.autoAdvantages.abilities || {};
+      this.settings.autoAdvantages.skills = this.settings.autoAdvantages.skills || {};
+    }
+    if (!this.settings.grantedAdvantages) {
+      this.settings.grantedAdvantages = { abilities: {}, skills: {} };
+    } else {
+      this.settings.grantedAdvantages.abilities = this.settings.grantedAdvantages.abilities || {};
+      this.settings.grantedAdvantages.skills = this.settings.grantedAdvantages.skills || {};
+    }
 	}
 	
 	async saveSettings() {
@@ -4173,6 +4234,26 @@ class AbilitiesModal extends Modal {
         const skillProficienciesData = this.plugin.settings.skillProficiencies;
         const proficiencyBonus = this.plugin.settings.proficiencyBonus;
         const loadedSkills = await this.plugin.loadSkillDefinitions(); // Carrega skills das notas
+        const rollWithAdvantageState = (
+            label: string,
+            bonus: number,
+            bonusString: string,
+            abilityUsed: string,
+            hasAdvantage: boolean
+        ) => {
+            const d20 = new Dice(20);
+            const checkResult = d20.rollCheck(bonus, hasAdvantage);
+            const criticalTag = checkResult.isCritical
+                ? " | ✨ CRITICAL (Nat 20)"
+                : checkResult.isCriticalFail
+                    ? " | 💀 CRITICAL FAIL (Nat 1)"
+                    : "";
+            const diceDescription = checkResult.usedAdvantage
+                ? `(${checkResult.firstRoll}, ${checkResult.secondRoll} -> ${checkResult.selectedRoll})`
+                : `(${checkResult.firstRoll})`;
+            const rollExplanation = `Ability: ${abilityUsed} | Advantage: ${checkResult.usedAdvantage ? "ON" : "OFF"} ${diceDescription} ${bonusString} = ${checkResult.total}${criticalTag}`;
+            new Notice(`${label}: ${checkResult.total}\n(${rollExplanation})`, 12000);
+        };
 
         contentEl.createEl("p", {text: `Current Proficiency Bonus: +${proficiencyBonus}`});
         contentEl.createEl("hr");
@@ -4202,6 +4283,8 @@ class AbilitiesModal extends Modal {
                 saveProfDisplay = `Expert (+${proficiencyBonus * 2})`;
             }
             const saveBonusString = saveBonus >= 0 ? `+${saveBonus}` : `${saveBonus}`;
+            const abilityAdvantageSources = this.plugin.settings.grantedAdvantages.abilities[statName] || [];
+            let hasAutoAbilityAdvantage = !!this.plugin.settings.autoAdvantages.abilities[statName];
 
             const statDiv = contentEl.createDiv({ cls: "ability-entry" });
             statDiv.style.marginBottom = "15px";
@@ -4213,7 +4296,7 @@ class AbilitiesModal extends Modal {
 
             new Setting(statDiv)
                 .setName(`${statName} Saving Throw`)
-                .setDesc(`Save Bonus: ${saveBonusString}. Status: ${saveProfDisplay}${saveSourcesDisplay}`)
+                .setDesc(`Save Bonus: ${saveBonusString}. Status: ${saveProfDisplay}${saveSourcesDisplay}. Ability used: ${statName}. Advantage from effects/feats: ${abilityAdvantageSources.length > 0 ? abilityAdvantageSources.map(s => s.split('/').pop()?.replace(/\.md$/, '') || s).join(', ') : "none"}.`)
                 .addButton(button => button
                     .setButtonText("🎲 Roll Save")
                     .setCta()
@@ -4222,6 +4305,22 @@ class AbilitiesModal extends Modal {
                         const totalRoll = d20Roll + saveBonus;
                         const rollExplanation = `Rolled ${d20Roll} (d20) ${saveBonusString} (save bonus) = ${totalRoll}`;
                         new Notice(`${statName} Save: ${totalRoll}\n(${rollExplanation})`, 10000);
+                    }))
+                .addToggle(toggle => {
+                    toggle
+                        .setTooltip("Auto-advantage for this ability checks")
+                        .setValue(hasAutoAbilityAdvantage)
+                        .onChange(async (value) => {
+                            this.plugin.settings.autoAdvantages.abilities[statName] = value;
+                            hasAutoAbilityAdvantage = value;
+                            await this.plugin.saveSettings();
+                        });
+                })
+                .addButton(button => button
+                    .setButtonText(`🎯 Ability Check ${hasAutoAbilityAdvantage || abilityAdvantageSources.length > 0 ? "(Adv)" : ""}`)
+                    .onClick(() => {
+                        const hasAdvantage = !!this.plugin.settings.autoAdvantages.abilities[statName] || abilityAdvantageSources.length > 0;
+                        rollWithAdvantageState(`${statName} Ability Check`, modifier, modifierString, statName, hasAdvantage);                      
                     }));
         });
 
@@ -4256,18 +4355,39 @@ class AbilitiesModal extends Modal {
                     proficiencyDisplay = `Expert (+${proficiencyBonus * 2})`;
                 }
                 const skillBonusString = skillBonus >= 0 ? `+${skillBonus}` : `${skillBonus}`;
-
+                const skillAdvantageSources = this.plugin.settings.grantedAdvantages.skills[skillId]
+                    || this.plugin.settings.grantedAdvantages.skills[skillId.toLowerCase()]
+                    || this.plugin.settings.grantedAdvantages.skills[skillDisplayName]
+                    || this.plugin.settings.grantedAdvantages.skills[skillDisplayName.toLowerCase()]
+                    || [];
+                let hasAutoSkillAdvantage = !!this.plugin.settings.autoAdvantages.skills[skillId];
+                const hasSkillAdvantage = hasAutoSkillAdvantage || skillAdvantageSources.length > 0;
+                
                 // MODIFICAÇÃO AQUI para tornar o nome da skill clicável
                 const skillSetting = new Setting(contentEl.createDiv({ cls: "skill-entry" }))
-                    .setDesc(`Status: ${proficiencyDisplay}${sourcesDisplay}`)
+                    .setDesc(`Status: ${proficiencyDisplay}${sourcesDisplay}. Ability used: ${skillDef.baseAbility}. Advantage: ${hasSkillAdvantage ? "ON" : "OFF"}${skillAdvantageSources.length > 0 ? ` (effects/feats: ${skillAdvantageSources.map(s => s.split('/').pop()?.replace(/\.md$/, '') || s).join(', ')})` : ""}.`)
                     .addButton(button => button
-                        .setButtonText("🎲 Roll")
+                        .setButtonText(`🎲 Roll ${hasSkillAdvantage ? "(Adv)" : ""}`)
                         .onClick(() => {
-                            const d20Roll = new Dice(20).roll();
-                            const totalRoll = d20Roll + skillBonus;
-                            const rollExplanation = `Rolled ${d20Roll} (d20) ${skillBonusString} (bonus) = ${totalRoll}`;
-                            new Notice(`${skillDisplayName} Check: ${totalRoll}\n(${rollExplanation})`, 10000);
-                        }));
+                            const hasAdvantageNow = !!this.plugin.settings.autoAdvantages.skills[skillId] || skillAdvantageSources.length > 0;
+                            rollWithAdvantageState(
+                                `${skillDisplayName} Check`,
+                                skillBonus,
+                                skillBonusString,
+                                skillDef.baseAbility,
+                                hasAdvantageNow
+                            );
+                        }))
+                    .addToggle(toggle => {
+                        toggle
+                            .setTooltip("Auto-advantage for this skill")
+                            .setValue(hasAutoSkillAdvantage)
+                            .onChange(async (value) => {
+                                this.plugin.settings.autoAdvantages.skills[skillId] = value;
+                                hasAutoSkillAdvantage = value;
+                                await this.plugin.saveSettings();
+                            });
+                    });
                 
                 // Limpa o nome padrão e cria um link clicável
                 skillSetting.nameEl.empty(); 

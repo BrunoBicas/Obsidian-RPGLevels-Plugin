@@ -5655,7 +5655,8 @@ new Setting(containerEl)
     drop.addOption("rolar", "Rolar o Dado");
 
     drop.setValue(this.plugin.settings.health.autoHpMode);
-    drop.onChange(async (value: "maximo" | "media" | "rolar") => {
+    drop.onChange(async (value) => {
+      if (value !== "maximo" && value !== "media" && value !== "rolar") return;
       this.plugin.settings.health.autoHpMode = value;
       await this.plugin.saveSettings();
       new Notice(`Modo de ganho de HP ajustado para: ${value}`);

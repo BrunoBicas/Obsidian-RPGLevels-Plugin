@@ -229,6 +229,14 @@ export default class RPGInventoryPlugin extends Plugin {
             }
         });
 
+        this.addCommand({
+            id: 'open-treasure',
+            name: 'Open Treasure',
+            callback: () => {
+                new TreasureSelectionModal(this.app, this).open();
+            }
+        });
+
         // Add ribbon icon to open shop selection
         this.addRibbonIcon('backpack', 'RPG System', () => {
             new InventoryModal(this.app, this).open();
@@ -773,6 +781,12 @@ class InventoryModal extends Modal {
             } else {
                 new Notice("You found nothing this time. Try again!");
             }
+        });
+
+        const treasureButton = contentEl.createEl('button', { text: 'Open Treasure 💎' });
+        treasureButton.addEventListener('click', () => {
+            this.close();
+            new TreasureSelectionModal(this.app, this.plugin).open();
         });
 
         // Add return to shop selection button
@@ -1873,6 +1887,70 @@ class ShopSelectionModal extends Modal {
         }
         
         // Add inventory button
+        const inventoryButton = contentEl.createEl('button', { text: 'Open Inventory', cls: 'inventory-button' });
+        inventoryButton.addEventListener('click', () => {
+            this.close();
+            new InventoryModal(this.app, this.plugin).open();
+        });
+    }
+
+    onClose(): void {
+        const { contentEl } = this;
+        contentEl.empty();
+    }
+}
+
+class TreasureSelectionModal extends Modal {
+    plugin: RPGInventoryPlugin;
+
+    constructor(app: any, plugin: RPGInventoryPlugin) {
+        super(app);
+        this.plugin = plugin;
+    }
+
+    onOpen(): void {
+        const { contentEl } = this;
+        contentEl.empty();
+
+        contentEl.createEl('h2', { text: 'Available Treasures' });
+        contentEl.createEl('p', {
+            text: 'Choose where to search. This adds new options and keeps the current treasure behavior.',
+            cls: 'shop-description'
+        });
+
+        const folderList = contentEl.createEl('div', { cls: 'shop-selection-list' });
+        const uniqueFolders = new Set<string>();
+
+        (this.plugin.settings.itemFolderPaths || []).forEach(folder => uniqueFolders.add(folder));
+        this.plugin.settings.shops.forEach(shop => uniqueFolders.add(shop.folderPath));
+
+        Array.from(uniqueFolders).forEach(folderPath => {
+            const treasureCard = folderList.createEl('div', { cls: 'shop-card' });
+            treasureCard.createEl('h3', { text: `📁 ${folderPath}` });
+            treasureCard.createEl('p', { text: 'Regular treasure roll: 1-3 items, 70% success chance.' });
+
+            const findButton = treasureCard.createEl('button', { text: 'Find Treasure', cls: 'mod-cta' });
+            findButton.addEventListener('click', async () => {
+                await this.plugin.processRegularLoot(folderPath, 1, 3, 70);
+            });
+        });
+
+        if (this.plugin.settings.customTreasures && this.plugin.settings.customTreasures.length > 0) {
+            contentEl.createEl('h2', { text: 'Custom Treasures' });
+            const customTreasureList = contentEl.createEl('div', { cls: 'shop-selection-list' });
+
+            this.plugin.settings.customTreasures.forEach(treasure => {
+                const treasureCard = customTreasureList.createEl('div', { cls: 'shop-card custom-shop-card' });
+                treasureCard.createEl('h3', { text: `💎 ${treasure.name}` });
+                treasureCard.createEl('p', { text: treasure.description });
+
+                const openButton = treasureCard.createEl('button', { text: 'Open Treasure', cls: 'mod-cta' });
+                openButton.addEventListener('click', async () => {
+                    await this.plugin.processCustomTreasure(treasure);
+                });
+            });
+        }
+
         const inventoryButton = contentEl.createEl('button', { text: 'Open Inventory', cls: 'inventory-button' });
         inventoryButton.addEventListener('click', () => {
             this.close();

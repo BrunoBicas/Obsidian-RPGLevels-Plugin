@@ -2,7 +2,7 @@
 // inventory.ts
 
 import { Plugin, Notice, PluginSettingTab, Setting, Modal, MarkdownView, TFile, TFolder, CachedMetadata, MarkdownRenderer } from 'obsidian';
-import { auctionShopModal } from './auction';
+import { auctionShopModal } from './auction.js';
 
 export interface InventoryItem {
     name: string;

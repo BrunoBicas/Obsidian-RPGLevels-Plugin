@@ -1,9 +1,9 @@
 import { App, Plugin, PluginSettingTab, Setting, TFile, MarkdownView, Notice, Modal, TFolder, TAbstractFile, FuzzySuggestModal, MarkdownRenderer } from 'obsidian';
-import { Dice } from "./dice";
-import { ArmorClassModal } from "./ArmorClassModal";
-import { Lvl20ShopModal } from "./Lvl20ShopModal";
-import RPGInventoryPlugin from "./inventory";
-import DnDSpellbookPlugin from "./spellbook";
+import { Dice } from "./dice.js";
+import { ArmorClassModal } from "./ArmorClassModal.js";
+import { Lvl20ShopModal } from "./Lvl20ShopModal.js";
+import RPGInventoryPlugin from "./inventory.js";
+import DnDSpellbookPlugin from "./spellbook.js";
 
 
 
@@ -18,6 +18,7 @@ interface CharacterStats {
 }
 
 interface SpeedSettings {
+  configuredBaseSpeed: number;
   baseSpeed: number;
   additionalSpeeds: Record<string, { type: string; value: number; sources: string[] }>;
 }
@@ -254,7 +255,8 @@ const DEFAULT_SETTINGS: RPGLevelsSettings = {
   manualFeatPoints: 0,
 
 	 speed: {
-    baseSpeed: 30, // Default walking speed
+    configuredBaseSpeed: 30, // User-configurable base walking speed
+    baseSpeed: 30, // Computed walking speed after effects
     additionalSpeeds: {},
   },
 
@@ -1022,7 +1024,7 @@ async applyAllPassiveEffects() {
         this.settings.defenses.immunities = {};
     }
     this.settings.skillProficiencies = {};
-    this.settings.speed.baseSpeed = 30; // Reset to default before applying bonuses
+    this.settings.speed.baseSpeed = this.settings.speed.configuredBaseSpeed ?? 30; // Reset to configured base before applying bonuses
     this.settings.speed.additionalSpeeds = {};
     this.settings.vision = { senses: {} }; 
     this.settings.grantedAdvantages = { abilities: {}, skills: {} };
@@ -1666,6 +1668,12 @@ public getAllClassEffectPaths(): string[] {
     } else {
       this.settings.grantedAdvantages.abilities = this.settings.grantedAdvantages.abilities || {};
       this.settings.grantedAdvantages.skills = this.settings.grantedAdvantages.skills || {};
+    }
+    if (!this.settings.speed) {
+      this.settings.speed = { ...DEFAULT_SETTINGS.speed };
+    }
+    if (this.settings.speed.configuredBaseSpeed === undefined) {
+      this.settings.speed.configuredBaseSpeed = this.settings.speed.baseSpeed ?? DEFAULT_SETTINGS.speed.configuredBaseSpeed;
     }
 	}
 	
@@ -5682,8 +5690,12 @@ new Setting(containerEl)
         .setPlaceholder('30')
         .setValue(String(this.plugin.settings.speed.baseSpeed))
         .onChange(async (value) => {
-          this.plugin.settings.speed.baseSpeed = parseInt(value) || 0;
+          const parsed = parseInt(value);
+          if (isNaN(parsed) || parsed <= 0) return;
+          this.plugin.settings.speed.configuredBaseSpeed = parsed;
+          this.plugin.settings.speed.baseSpeed = parsed;
           await this.plugin.saveSettings();
+          await this.plugin.applyAllPassiveEffects();
         }));
   containerEl.createEl('h3', { text: 'Modal Representative Notes' });
 new Setting(containerEl)

@@ -1,5 +1,5 @@
 import { App, Modal, Notice, Setting } from "obsidian";
-import type RPGLevelsPlugin from "./main"; // ajuste se o nome for diferente
+import type RPGLevelsPlugin from "./main.js"; // ajuste se o nome for diferente
 
 export class Lvl20ShopModal extends Modal {
   plugin: RPGLevelsPlugin;

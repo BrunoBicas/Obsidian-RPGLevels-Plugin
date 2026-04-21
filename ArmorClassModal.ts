@@ -1,5 +1,5 @@
 import { App, Modal } from "obsidian";
-import RPGLevelsPlugin from "./main";
+import RPGLevelsPlugin from "./main.js";
 
 export class ArmorClassModal extends Modal {
   plugin: RPGLevelsPlugin;

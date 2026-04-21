@@ -1,5 +1,5 @@
 import { Modal, Notice } from 'obsidian';
-import RPGInventoryPlugin, { InventoryItem, ActiveListing, MarketRegion } from './inventory';
+import RPGInventoryPlugin, { InventoryItem, ActiveListing, MarketRegion } from './inventory.js';
 
 function getRarity(item: InventoryItem): string {  
     if (!item) return "Common";
